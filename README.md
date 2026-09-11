@@ -2,6 +2,9 @@
 
 b.stage 서드파티 템플릿 프로젝트
 
+**🌈 라이브 데모**: https://merrrrrrrry.github.io/ariana-test-custom-templates-sandbox/
+(master에 push될 때마다 [GitHub Actions](.github/workflows/deploy-pages.yml)가 자동으로 재배포합니다. b.stage 플랫폼 실배포와는 별개의 정적 데모 페이지입니다.)
+
 ## 시작하기
 
 ```bash
