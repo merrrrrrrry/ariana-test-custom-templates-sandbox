@@ -34,6 +34,56 @@ interface RankedFeed extends StarFeedItem {
   score: number
 }
 
+// GET /content/v1/boards, /content/v1/boards/{boardId}/posts, /content/v1/contents/{contentIds}/extras
+// 응답 모양 (게이트웨이 API 레퍼런스, "계약 파트너 전용" 태그 — 이 앱키에 권한이 없으면 에러가 날 수 있다).
+// 문서 스키마의 id는 `{timestamp, date}` 객체로 표기되지만, 실제 ariana-test 사이트에서 글을 열어보면
+// 평범한 hex 문자열 ID였다(예: /community/board/{boardId}/post/{postId}) — 문서 생성기의 표현 방식일 뿐이라
+// 코드에서는 string으로 다룬다.
+interface BoardSummary {
+  id: string
+  title: string
+}
+
+interface BoardPostAuthor {
+  id: string
+  nickname: string
+}
+
+interface BoardPostItem {
+  id: string
+  author: BoardPostAuthor
+  title?: string
+  commentCount?: number
+  viewCount?: number
+  reactionCounts?: Record<string, number>
+}
+
+interface BoardPostsResponse {
+  board: BoardSummary
+  boardContents: {
+    items: BoardPostItem[]
+  }
+}
+
+interface ContentExtras {
+  commentCount?: number
+  reactionCounts?: Record<string, number>
+}
+
+type ExtrasMap = Record<string, ContentExtras>
+
+interface RankedPost {
+  id: string
+  boardId: string
+  boardTitle: string
+  title: string
+  authorNickname: string
+  reactionTotal: number
+  commentCount: number
+  viewCount: number
+  score: number
+}
+
 interface ConfettiPiece {
   id: number
   left: number
@@ -42,8 +92,9 @@ interface ConfettiPiece {
   duration: number
 }
 
-// 실측 라우트 — /story/feed/{feedId}로 이동하면 상세 화면이 뜬다 (ariana-test 샌드박스에서 직접 확인).
+// 실측 라우트 — ariana-test 샌드박스에서 직접 클릭해보고 확인한 상세 화면 경로.
 const FEED_DETAIL_PATH = (id: string) => `/story/feed/${id}`
+const COMMUNITY_POST_PATH = (boardId: string, postId: string) => `/community/board/${boardId}/post/${postId}`
 
 // 축하 연출용 고정 팔레트 — 무지개 텍스트·룰렛과 같은 장식 예외.
 const CONFETTI_COLORS = ['#ff5e7e', '#ffb703', '#8ecae6', '#a3ff8c', '#c084fc', '#ffd166']
@@ -73,8 +124,7 @@ function pickImage(item: StarFeedItem): string | undefined {
   return item.mainImage || item.images?.[0] || item.video?.thumbnailPaths?.[0]
 }
 
-function reactionTotal(item: StarFeedItem): number {
-  const counts = item.reactionCounts
+function sumReactions(counts: Record<string, number> | undefined): number {
   if (!counts) return 0
   return Object.values(counts).reduce((sum, n) => sum + (typeof n === 'number' ? n : 0), 0)
 }
@@ -89,11 +139,20 @@ function makeConfetti(): ConfettiPiece[] {
   }))
 }
 
+function rankPosts(posts: RankedPost[]): RankedPost[] {
+  // 반응 합계 + 댓글 수 내림차순, 동점이면 조회수 내림차순.
+  return [...posts].sort((a, b) => b.score - a.score || b.viewCount - a.viewCount)
+}
+
 export default function StarFeedsPopularTemplate() {
   const { navigate } = useNavigation()
+
   const [items, setItems] = useState<RankedFeed[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confetti, setConfetti] = useState<ConfettiPiece[]>([])
+
+  const [communityTop, setCommunityTop] = useState<RankedPost[] | null>(null)
+  const [communityError, setCommunityError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -104,7 +163,7 @@ export default function StarFeedsPopularTemplate() {
         const ranked = res.data.items
           .filter((item) => pickImage(item))
           .map((item) => {
-            const total = reactionTotal(item)
+            const total = sumReactions(item.reactionCounts)
             return { ...item, reactionTotal: total, score: total + (item.commentCount ?? 0) }
           })
           .sort((a, b) => b.score - a.score)
@@ -116,6 +175,77 @@ export default function StarFeedsPopularTemplate() {
         if (cancelled) return
         setError(err instanceof Error ? err.message : '인기글을 불러오지 못했습니다')
       })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadCommunityTop() {
+      // 1) 보드 목록 조회
+      const boards = (await client.get<BoardSummary[]>('/content/v1/boards')).data
+
+      // 2) 보드마다 포스트 목록 조회 — 한 보드가 실패해도 나머지는 계속 집계한다.
+      const postsByBoard = await Promise.all(
+        boards.map((board) =>
+          client
+            .get<BoardPostsResponse>('/content/v1/boards/{boardId}/posts', {
+              path: { boardId: board.id },
+              params: { request: '' },
+            })
+            .then((res) =>
+              res.data.boardContents.items.map((post) => ({
+                id: post.id,
+                boardId: board.id,
+                boardTitle: board.title,
+                title: post.title || '(제목 없음)',
+                authorNickname: post.author?.nickname ?? '익명',
+                reactionTotal: sumReactions(post.reactionCounts),
+                commentCount: post.commentCount ?? 0,
+                viewCount: post.viewCount ?? 0,
+                score: sumReactions(post.reactionCounts) + (post.commentCount ?? 0),
+              }))
+            )
+            .catch(() => [] as RankedPost[])
+        )
+      )
+
+      let top10 = rankPosts(postsByBoard.flat()).slice(0, 10)
+
+      // 3) 상위 10개만 extras로 카운트 갱신 후 최종 순위 확정.
+      if (top10.length > 0) {
+        try {
+          const idsParam = top10.map((p) => p.id).join(',')
+          const extras = (
+            await client.get<ExtrasMap>('/content/v1/contents/{contentIds}/extras', {
+              path: { contentIds: idsParam },
+            })
+          ).data
+          top10 = top10.map((post) => {
+            const extra = extras[post.id]
+            if (!extra) return post
+            const reactionTotal = sumReactions(extra.reactionCounts)
+            const commentCount = extra.commentCount ?? post.commentCount
+            return { ...post, reactionTotal, commentCount, score: reactionTotal + commentCount }
+          })
+          top10 = rankPosts(top10)
+        } catch {
+          // extras 갱신 실패해도 1차 랭킹은 그대로 보여준다.
+        }
+      }
+
+      if (!cancelled) setCommunityTop(top10)
+    }
+
+    loadCommunityTop().catch((err) => {
+      if (cancelled) return
+      setCommunityError(
+        err instanceof Error ? err.message : '커뮤니티 인기글을 불러오지 못했습니다 (권한이 없는 API일 수 있어요)'
+      )
+    })
+
     return () => {
       cancelled = true
     }
@@ -236,6 +366,99 @@ export default function StarFeedsPopularTemplate() {
             }}
           />
         ))}
+      </div>
+
+      {/* ── 커뮤니티 인기글 TOP 10 (보드 전체 취합) ── */}
+      <div style={{ marginTop: 40, position: 'relative' }}>
+        <h2 style={{ ...textStyle('18/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>
+          🏆 커뮤니티 인기글 TOP 10
+        </h2>
+        <p style={{ ...textStyle('13/body/reg'), color: color.text.secondary, margin: '0 0 12px' }}>
+          모든 보드를 통틀어 반응+댓글이 가장 많았던 글 (동점이면 조회수 순)
+        </p>
+
+        {communityError && (
+          <p style={{ ...textStyle('15/body/reg'), color: color.text.secondary }}>{communityError}</p>
+        )}
+        {!communityError && communityTop === null && (
+          <p style={{ ...textStyle('15/body/reg'), color: color.text.secondary }}>불러오는 중…</p>
+        )}
+        {!communityError && communityTop !== null && communityTop.length === 0 && (
+          <p style={{ ...textStyle('15/body/reg'), color: color.text.secondary }}>표시할 글이 없습니다.</p>
+        )}
+
+        {communityTop && communityTop.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {communityTop.map((post, index) => {
+              const rank = index + 1
+              const isTop1 = rank === 1
+              return (
+                <button
+                  key={post.id}
+                  onClick={() => navigate(COMMUNITY_POST_PATH(post.boardId, post.id))}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    width: '100%',
+                    padding: '12px 14px',
+                    border: 'none',
+                    borderRadius: 12,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    background: color.surface.card,
+                    boxShadow: shadow['default-small'],
+                    animation: isTop1 ? 'crown-glow 1.8s ease-in-out infinite' : undefined,
+                  }}
+                >
+                  <span
+                    style={{
+                      minWidth: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: RANK_BADGE_BG[rank] ?? color.bg['grouped-weak'],
+                      color: rank <= 3 ? '#1a1a1a' : color.text.secondary,
+                      flexShrink: 0,
+                      ...textStyle('12/caption/semibold'),
+                    }}
+                  >
+                    {RANK_MEDAL[rank] ?? rank}
+                  </span>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p
+                      style={{
+                        ...textStyle('14/body/semibold'),
+                        color: color.text.primary,
+                        margin: 0,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {post.title}
+                    </p>
+                    <p style={{ ...textStyle('11/caption/reg'), color: color.text.secondary, margin: '2px 0 0' }}>
+                      {post.boardTitle} · {post.authorNickname}
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                    <span style={{ ...textStyle('12/caption/semibold'), color: color.text.secondary }}>
+                      ❤️ {post.reactionTotal}
+                    </span>
+                    <span style={{ ...textStyle('12/caption/semibold'), color: color.text.secondary }}>
+                      💬 {post.commentCount}
+                    </span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )
