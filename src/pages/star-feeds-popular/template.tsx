@@ -218,10 +218,11 @@ export default function StarFeedsPopularTemplate() {
       if (top10.length > 0) {
         try {
           const idsParam = top10.map((p) => p.id).join(',')
+          // 주의: client.get의 `path` 치환은 각 값을 encodeURIComponent로 인코딩해서
+          // 콤마가 %2C로 바뀌어버린다 — 게이트웨이는 리터럴 콤마로 구분된 ID 목록을
+          // 기대하므로, {contentIds} 템플릿 대신 URL을 직접 조립해 콤마를 그대로 보낸다.
           const extras = (
-            await client.get<ExtrasMap>('/content/v1/contents/{contentIds}/extras', {
-              path: { contentIds: idsParam },
-            })
+            await client.get<ExtrasMap>(`/content/v1/contents/${idsParam}/extras`)
           ).data
           top10 = top10.map((post) => {
             const extra = extras[post.id]
