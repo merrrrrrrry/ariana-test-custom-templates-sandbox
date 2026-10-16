@@ -5,14 +5,17 @@ import { client } from './client'
 
 // ────────────────────────────────────────────────────────────────────────
 // 스타 댓글 모아보기 — 공용 화면 컴포넌트 (createTemplate 호출 없음)
-// 쓰는 곳: src/slots/star-comments-feed (라운지 스토리 슬롯), src/pages/star-story-comments (자체 주소 페이지)
+// 쓰는 곳: src/slots/star-comments-feed (콘텐츠 홈 슬롯), src/pages/star-story-comments (자체 주소 페이지)
 // 슬롯은 context를 주지 않으므로 라운지 핸들은 현재 주소에서 읽는다.
 //
 // 데이터 출처 (스타 댓글을 작성자별로 모아 주는 API는 없다 — 아래를 조합):
-//   1) GET /home/v1/star-home/lounges/{handle}/feeds  → items[]
-//      (핸들을 못 읽으면 GET /home/v1/star-home/feeds 로 대체)
+//   1) 콘텐츠: 같은 도메인 GET /svc/home/api/v1/home/content → contentSections[].contents[]
+//      + GET /home/v1/content-home/sections/curation, /home/v1/content-home/shows
+//      (탭 시 /contents/{id}로 이동)
+//   2) 스토리: GET /home/v1/star-home/lounges/{handle}/feeds → items[]
+//      (핸들을 못 읽으면 GET /home/v1/star-home/feeds 로 대체, 탭 시 /story/feed/{id})
 //      각 항목: typeId(글 id) · title · commentedStars[] · latestComment
-//   2) GET /content/v1/contents/{ids}/extras?preferStarComment=true
+//   3) GET /content/v1/contents/{ids}/extras?preferStarComment=true
 //      → id별 latestComment(스타 댓글 우선) · 최신 reactionCounts
 //      (실패하거나 비어 있으면 1)의 latestComment를 그대로 쓴다)
 // 한계: 글당 "스타의 최신 댓글 1개"만 모은다(전체 댓글 이력은 아님).
@@ -33,12 +36,27 @@ interface CommentRaw {
   reactionCounts?: Record<string, number>
 }
 
+type ContentKind = 'story' | 'contents'
+
 interface ContentItem {
   typeId: string
   title?: string
   description?: string
   commentedStars?: StarRef[]
   latestComment?: CommentRaw
+  kind?: ContentKind
+}
+
+interface HomeContentResponse {
+  contentSections?: { contents?: ContentItem[] }[]
+}
+
+interface CurationResponse {
+  contents?: { items?: ContentItem[] }
+}
+
+interface ShowsResponse {
+  shows?: ContentItem[]
 }
 
 interface ContentExtras {
@@ -55,6 +73,7 @@ type ExtrasMap = Record<string, ContentExtras>
 interface StarComment {
   commentId: string
   contentId: string
+  kind: ContentKind
   contentTitle: string
   star: StarRef
   body: string
@@ -99,19 +118,46 @@ function readLoungeHandle(): string | null {
   return match ? decodeURIComponent(match[1]) : null
 }
 
+// 콘텐츠 탭이 실제로 그리는 섹션들. 게이트웨이에는 섹션 목록 API가 없고(sections/{id}만 있음),
+// curation·shows는 운영자가 직접 큐레이션한 것만 담겨 비어 있기 쉽다. 그래서 같은 도메인의
+// 홈 콘텐츠 API(로그인 쿠키로 호출)에서 섹션별 콘텐츠를 읽는다. 실패하면 조용히 건너뛴다.
+async function loadHomeSectionContents(): Promise<ContentItem[]> {
+  const res = await fetch(`${window.location.origin}/svc/home/api/v1/home/content`, { credentials: 'include' })
+  if (!res.ok) return []
+  const data = (await res.json()) as HomeContentResponse
+  return (data.contentSections ?? []).flatMap((section) => section.contents ?? [])
+}
+
 async function loadStarComments(): Promise<StarComment[]> {
   const handle = readLoungeHandle()
-  const feeds = await (handle
-    ? client.get<FeedsResponse>('/home/v1/star-home/lounges/{loungeHandle}/feeds', {
-        path: { loungeHandle: handle },
-        params: { page: 1, pageSize: PAGE_SIZE },
-      })
-    : client.get<FeedsResponse>('/home/v1/star-home/feeds', { params: { page: 1, pageSize: PAGE_SIZE } })
-  ).then((res) => res.data?.items ?? [])
+  const [feeds, curation, shows, homeSections] = await Promise.all([
+    (handle
+      ? client.get<FeedsResponse>('/home/v1/star-home/lounges/{loungeHandle}/feeds', {
+          path: { loungeHandle: handle },
+          params: { page: 1, pageSize: PAGE_SIZE },
+        })
+      : client.get<FeedsResponse>('/home/v1/star-home/feeds', { params: { page: 1, pageSize: PAGE_SIZE } })
+    )
+      .then((res) => res.data?.items ?? [])
+      .catch(() => [] as ContentItem[]),
+    client
+      .get<CurationResponse>('/home/v1/content-home/sections/curation', { params: { page: 1, pageSize: PAGE_SIZE } })
+      .then((res) => res.data?.contents?.items ?? [])
+      .catch(() => [] as ContentItem[]),
+    client
+      .get<ShowsResponse>('/home/v1/content-home/shows')
+      .then((res) => res.data?.shows ?? [])
+      .catch(() => [] as ContentItem[]),
+    loadHomeSectionContents().catch(() => [] as ContentItem[]),
+  ])
 
-  // 중복 제거 + 스타가 댓글을 단 글만 남긴다.
+  // 중복 제거 + 스타가 댓글을 단 글만 남긴다. 콘텐츠 쪽을 먼저 넣어 같은 id면 콘텐츠로 본다.
   const byId = new Map<string, ContentItem>()
-  for (const item of feeds) {
+  const tagged: ContentItem[] = [
+    ...[...homeSections, ...curation, ...shows].map((item) => ({ ...item, kind: 'contents' as const })),
+    ...feeds.map((item) => ({ ...item, kind: 'story' as const })),
+  ]
+  for (const item of tagged) {
     if (item?.typeId && (item.commentedStars?.length ?? 0) > 0 && !byId.has(item.typeId)) {
       byId.set(item.typeId, item)
     }
@@ -143,6 +189,7 @@ async function loadStarComments(): Promise<StarComment[]> {
     comments.push({
       commentId: comment.id,
       contentId: content.typeId,
+      kind: content.kind ?? 'story',
       contentTitle: content.title || content.description || '(제목 없음)',
       star: author,
       body: comment.body,
@@ -281,7 +328,7 @@ export default function StarCommentsFeed() {
         {visible.map((c) => (
           <button
             key={c.commentId}
-            onClick={() => navigate(`/story/feed/${c.contentId}`)}
+            onClick={() => navigate(c.kind === 'contents' ? `/contents/${c.contentId}` : `/story/feed/${c.contentId}`)}
             style={{
               display: 'block',
               width: '100%',
