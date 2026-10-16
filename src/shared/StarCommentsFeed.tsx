@@ -20,7 +20,10 @@ import { client } from './client'
 //   4) 글마다 스타 댓글 전부: 같은 도메인 GET /svc/content/api/v1/comments/stars?rootId&rootType=CONTENT
 //      (여러 스타·여러 개, 답글 포함) + 반응 수는 GET /svc/content/api/v1/comments?parentId&parentType=CONTENT
 //      (실패하면 3)의 최신 스타 댓글 1개로 대체)
-//   5) 칩의 "모든 스타": GET /home/v1/star-home/stars + 댓글을 쓴 스타
+//   5) 커뮤니티: GET /content/v1/boards → /boards/{id}/posts, 댓글 있는 최신 글의 최상위 댓글
+//      (GET /svc/content/api/v1/comments?parentType=BOARD_CONTENT)에서 작성자 type이 STAR인 것
+//      (탭 시 /community/board/{boardId}/post/{id})
+//   6) 칩의 "모든 스타": GET /home/v1/star-home/stars + 댓글을 쓴 스타
 // 한계: 스타가 남의 댓글에 단 답글은 반응 수를 알 수 없어 0으로 나온다. 최근 50개 글만 본다.
 // ────────────────────────────────────────────────────────────────────────
 
@@ -40,7 +43,7 @@ interface CommentRaw {
   reactionCounts?: Record<string, number>
 }
 
-type ContentKind = 'story' | 'contents'
+type ContentKind = 'story' | 'contents' | 'community'
 
 interface ContentItem {
   typeId: string
@@ -77,6 +80,7 @@ type ExtrasMap = Record<string, ContentExtras>
 interface StarComment {
   commentId: string
   contentId: string
+  boardId?: string // 커뮤니티 글일 때만
   kind: ContentKind
   contentTitle: string
   star: StarRef
@@ -89,6 +93,7 @@ type SortKey = 'latest' | 'reactions'
 
 const PAGE_SIZE = 50 // star-home feeds는 50으로 실검증됨(최대값은 문서에 없음)
 const VISIBLE_COUNT = 12 // 1·2·3열 어디서든 마지막 줄이 비지 않는 수
+const COMMUNITY_POST_LIMIT = 40 // 1분마다 갱신하므로 댓글 조회 요청 수를 제한한다
 const REFRESH_INTERVAL_MS = 60_000
 
 // 반응형 레이아웃 — 플랫폼 콘텐츠 섹션과 같은 규칙:
@@ -186,22 +191,106 @@ async function loadStarCommentsOf(contentId: string): Promise<CommentRaw[] | nul
   }
 }
 
-async function loadReactionCounts(contentId: string): Promise<Map<string, number>> {
-  const map = new Map<string, number>()
+// 최상위 댓글 목록(반응 수 포함). 실패하면 빈 목록.
+async function loadTopLevelComments(parentId: string, parentType: 'CONTENT' | 'BOARD_CONTENT'): Promise<CommentRaw[]> {
   try {
     const res = await fetch(
-      `${window.location.origin}/svc/content/api/v1/comments?includesPivot=false&pageSize=48&parentId=${encodeURIComponent(contentId)}&parentType=CONTENT`,
+      `${window.location.origin}/svc/content/api/v1/comments?includesPivot=false&pageSize=48&parentId=${encodeURIComponent(parentId)}&parentType=${parentType}`,
       { credentials: 'include' }
     )
-    if (!res.ok) return map
-    for (const c of ((await res.json()) as CommentListResponse).items ?? []) map.set(c.id, sumReactions(c.reactionCounts))
+    if (!res.ok) return []
+    return ((await res.json()) as CommentListResponse).items ?? []
   } catch {
-    // 반응 수를 못 읽어도 댓글은 보여 준다(0으로 표시).
+    return [] // 못 읽어도 나머지는 보여 준다.
   }
+}
+
+async function loadReactionCounts(contentId: string): Promise<Map<string, number>> {
+  const map = new Map<string, number>()
+  for (const c of await loadTopLevelComments(contentId, 'CONTENT')) map.set(c.id, sumReactions(c.reactionCounts))
   return map
 }
 
+interface BoardSummary {
+  id: string
+  title?: string
+}
+
+interface BoardPost {
+  id: string
+  title?: string
+  description?: string
+  commentCount?: number
+  createdAt?: string
+}
+
+interface BoardPostsResponse {
+  boardContents?: { items?: BoardPost[] }
+}
+
+// 커뮤니티: 게시판 글은 commentedStars가 비어 있고 글당 스타 댓글 API(comments/stars)도 비어 있다.
+// 그래서 댓글이 있는 최신 글의 최상위 댓글 목록에서 작성자 type이 STAR인 것을 고른다.
+async function loadCommunityStarComments(): Promise<StarComment[]> {
+  const boards = (await client.get<BoardSummary[]>('/content/v1/boards')).data ?? []
+  const postsByBoard = await Promise.all(
+    boards.map((board) =>
+      client
+        .get<BoardPostsResponse>('/content/v1/boards/{boardId}/posts', {
+          path: { boardId: board.id },
+          params: { request: '' },
+        })
+        .then((res) =>
+          (res.data?.boardContents?.items ?? [])
+            .filter((post) => (post.commentCount ?? 0) > 0)
+            .map((post) => ({ board, post }))
+        )
+        .catch(() => [] as { board: BoardSummary; post: BoardPost }[])
+    )
+  )
+  const targets = postsByBoard
+    .flat()
+    .sort((a, b) => Date.parse(b.post.createdAt ?? '') - Date.parse(a.post.createdAt ?? ''))
+    .slice(0, COMMUNITY_POST_LIMIT)
+
+  const lists = await Promise.all(
+    targets.map(async ({ board, post }) => {
+      const out: StarComment[] = []
+      for (const comment of await loadTopLevelComments(post.id, 'BOARD_CONTENT')) {
+        if (comment.author?.type !== 'STAR' || !comment.body) continue
+        out.push({
+          commentId: comment.id,
+          contentId: post.id,
+          boardId: board.id,
+          kind: 'community',
+          contentTitle: post.title || post.description || '(제목 없음)',
+          star: comment.author,
+          body: comment.body,
+          createdAt: comment.createdAt ? Date.parse(comment.createdAt) : 0,
+          reactions: sumReactions(comment.reactionCounts),
+        })
+      }
+      return out
+    })
+  )
+  return lists.flat()
+}
+
+function detailPath(c: StarComment): string {
+  if (c.kind === 'contents') return `/contents/${c.contentId}`
+  if (c.kind === 'community') return `/community/board/${c.boardId}/post/${c.contentId}`
+  return `/story/feed/${c.contentId}`
+}
+
 async function loadStarComments(): Promise<{ comments: StarComment[]; stars: StarRef[] }> {
+  // 커뮤니티 스타 댓글은 다른 소스와 독립이라 먼저 시작해 두고 마지막에 합친다.
+  const communityPromise = loadCommunityStarComments().catch(() => [] as StarComment[])
+  const { comments, stars } = await loadStoryAndContentsStarComments()
+  const community = await communityPromise
+  const seenIds = new Set(comments.map((c) => c.commentId))
+  return { comments: [...comments, ...community.filter((c) => !seenIds.has(c.commentId))], stars }
+}
+
+async function loadStoryAndContentsStarComments(): Promise<{ comments: StarComment[]; stars: StarRef[] }> {
   const handle = readLoungeHandle()
   const [feeds, curation, shows, homeSections] = await Promise.all([
     (handle
@@ -354,13 +443,14 @@ export default function StarCommentsFeed() {
     return Array.from(map.values())
   }, [comments, knownStars])
 
-  const visible = useMemo(() => {
+  const [shownCount, setShownCount] = useState(VISIBLE_COUNT)
+  const { visible, total } = useMemo(() => {
     const filtered = (comments ?? []).filter((c) => selectedStars.size === 0 || selectedStars.has(c.star.id))
     const sorted = [...filtered].sort((a, b) =>
       sort === 'latest' ? b.createdAt - a.createdAt : b.reactions - a.reactions || b.createdAt - a.createdAt
     )
-    return sorted.slice(0, VISIBLE_COUNT)
-  }, [comments, selectedStars, sort])
+    return { visible: sorted.slice(0, shownCount), total: sorted.length }
+  }, [comments, selectedStars, sort, shownCount])
 
   const toggleStar = (id: string) =>
     setSelectedStars((prev) => {
@@ -495,7 +585,7 @@ export default function StarCommentsFeed() {
         {visible.map((c) => (
           <button
             key={c.commentId}
-            onClick={() => navigate(c.kind === 'contents' ? `/contents/${c.contentId}` : `/story/feed/${c.contentId}`)}
+            onClick={() => navigate(detailPath(c))}
             style={{
               display: 'flex',
               flexDirection: 'column',
@@ -580,6 +670,16 @@ export default function StarCommentsFeed() {
           </button>
         ))}
       </div>
+      {total > visible.length && (
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+          <button
+            onClick={() => setShownCount((n) => n + VISIBLE_COUNT)}
+            style={{ ...textStyle('14/body/semibold'), minHeight: 40, padding: '0 20px', borderRadius: 999, border: `1px solid ${color.border['default-a']}`, background: 'transparent', color: color.text.primary, cursor: 'pointer' }}
+          >
+            더보기 ({total - visible.length})
+          </button>
+        </div>
+      )}
         </>
       )}
     </section>
