@@ -17,14 +17,18 @@ import { client } from './client'
 //      각 항목: typeId(글 id) · title · commentedStars[] · latestComment
 //   3) GET /content/v1/contents/{ids}/extras?preferStarComment=true
 //      → id별 latestComment(스타 댓글 우선) · 최신 reactionCounts
-//      (실패하거나 비어 있으면 1)의 latestComment를 그대로 쓴다)
-// 한계: 글당 "스타의 최신 댓글 1개"만 모은다(전체 댓글 이력은 아님).
+//   4) 글마다 스타 댓글 전부: 같은 도메인 GET /svc/content/api/v1/comments/stars?rootId&rootType=CONTENT
+//      (여러 스타·여러 개, 답글 포함) + 반응 수는 GET /svc/content/api/v1/comments?parentId&parentType=CONTENT
+//      (실패하면 3)의 최신 스타 댓글 1개로 대체)
+//   5) 칩의 "모든 스타": GET /home/v1/star-home/stars + 댓글을 쓴 스타
+// 한계: 스타가 남의 댓글에 단 답글은 반응 수를 알 수 없어 0으로 나온다. 최근 50개 글만 본다.
 // ────────────────────────────────────────────────────────────────────────
 
 interface StarRef {
   id: string
   nickname: string
   avatarImgPath?: string
+  type?: string
 }
 
 interface CommentRaw {
@@ -161,7 +165,43 @@ async function loadHomeSectionContents(): Promise<ContentItem[]> {
   return (data.contentSections ?? []).flatMap((section) => section.contents ?? [])
 }
 
-async function loadStarComments(): Promise<StarComment[]> {
+interface CommentListResponse {
+  items?: CommentRaw[]
+}
+
+// 글 상세 화면이 쓰는 같은 도메인 API(로그인 쿠키). 게이트웨이에는 댓글 목록 API가 없다.
+//   GET /svc/content/api/v1/comments/stars?rootId&rootType=CONTENT → 그 글에 스타가 쓴 댓글(답글 포함) 전부
+//   GET /svc/content/api/v1/comments?parentId&parentType=CONTENT   → 최상위 댓글(반응 수 포함)
+// 실패(권한·경로 변경)하면 null → 호출한 쪽이 최신 스타 댓글 1개로 대체한다.
+async function loadStarCommentsOf(contentId: string): Promise<CommentRaw[] | null> {
+  try {
+    const res = await fetch(
+      `${window.location.origin}/svc/content/api/v1/comments/stars?pageSize=50&rootId=${encodeURIComponent(contentId)}&rootType=CONTENT`,
+      { credentials: 'include' }
+    )
+    if (!res.ok) return null
+    return ((await res.json()) as CommentListResponse).items ?? []
+  } catch {
+    return null
+  }
+}
+
+async function loadReactionCounts(contentId: string): Promise<Map<string, number>> {
+  const map = new Map<string, number>()
+  try {
+    const res = await fetch(
+      `${window.location.origin}/svc/content/api/v1/comments?includesPivot=false&pageSize=48&parentId=${encodeURIComponent(contentId)}&parentType=CONTENT`,
+      { credentials: 'include' }
+    )
+    if (!res.ok) return map
+    for (const c of ((await res.json()) as CommentListResponse).items ?? []) map.set(c.id, sumReactions(c.reactionCounts))
+  } catch {
+    // 반응 수를 못 읽어도 댓글은 보여 준다(0으로 표시).
+  }
+  return map
+}
+
+async function loadStarComments(): Promise<{ comments: StarComment[]; stars: StarRef[] }> {
   const handle = readLoungeHandle()
   const [feeds, curation, shows, homeSections] = await Promise.all([
     (handle
@@ -196,7 +236,12 @@ async function loadStarComments(): Promise<StarComment[]> {
     }
   }
   const contents = Array.from(byId.values())
-  if (contents.length === 0) return []
+  // 칩에 보여 줄 "모든 스타": 스타 목록 API + 댓글을 쓴 스타(아래에서 합친다).
+  const allStars = await client
+    .get<StarRef[]>('/home/v1/star-home/stars')
+    .then((res) => (Array.isArray(res.data) ? res.data : []))
+    .catch(() => [] as StarRef[])
+  if (contents.length === 0) return { comments: [], stars: allStars }
 
   // 스타 댓글 우선(latestComment) + 최신 카운트를 extras로 일괄 조회.
   const extrasList = await Promise.all(
@@ -211,31 +256,45 @@ async function loadStarComments(): Promise<StarComment[]> {
   const extras: ExtrasMap = Object.assign({}, ...extrasList)
 
   const comments: StarComment[] = []
-  for (const content of contents) {
-    // extras(스타 댓글 우선)가 비면 피드가 준 latestComment로 대체.
-    const comment = extras[content.typeId]?.latestComment ?? content.latestComment
-    const author = comment?.author
-    if (!comment || !author || !comment.body) continue
-    // 작성자가 "댓글 단 스타" 목록에 있을 때만 스타 댓글로 인정한다.
-    const starIds = new Set((extras[content.typeId]?.commentedStars ?? content.commentedStars ?? []).map((s) => s.id))
-    if (!starIds.has(author.id)) continue
-    comments.push({
-      commentId: comment.id,
-      contentId: content.typeId,
-      kind: content.kind ?? 'story',
-      contentTitle: content.title || content.description || '(제목 없음)',
-      star: author,
-      body: comment.body,
-      createdAt: comment.createdAt ? Date.parse(comment.createdAt) : 0,
-      reactions: sumReactions(comment.reactionCounts),
+  const seen = new Set<string>()
+  await Promise.all(
+    contents.map(async (content) => {
+      // extras(스타 댓글 우선)가 비면 피드가 준 latestComment로 대체.
+      const latest = extras[content.typeId]?.latestComment ?? content.latestComment
+      const starIds = new Set((extras[content.typeId]?.commentedStars ?? content.commentedStars ?? []).map((s) => s.id))
+
+      // 글의 스타 댓글 전부(여러 스타·여러 개). 실패하면 최신 스타 댓글 1개로 대체한다.
+      const raws = (await loadStarCommentsOf(content.typeId)) ?? (latest ? [latest] : [])
+      // 반응 수는 스타 댓글 목록에 없어서 일반 댓글 목록 + extras의 최신 댓글에서 id로 찾아 붙인다.
+      const reactionsById = raws.length > 0 ? await loadReactionCounts(content.typeId) : new Map<string, number>()
+      if (latest?.id) reactionsById.set(latest.id, sumReactions(latest.reactionCounts))
+
+      for (const comment of raws) {
+        const author = comment.author
+        if (!author || !comment.body || seen.has(comment.id)) continue
+        // 작성자가 "댓글 단 스타"일 때만 스타 댓글로 인정한다(스타 API는 이미 스타 것만 준다).
+        if (starIds.size > 0 && !starIds.has(author.id) && author.type !== 'STAR') continue
+        seen.add(comment.id)
+        comments.push({
+          commentId: comment.id,
+          contentId: content.typeId,
+          kind: content.kind ?? 'story',
+          contentTitle: content.title || content.description || '(제목 없음)',
+          star: author,
+          body: comment.body,
+          createdAt: comment.createdAt ? Date.parse(comment.createdAt) : 0,
+          reactions: reactionsById.get(comment.id) ?? sumReactions(comment.reactionCounts),
+        })
+      }
     })
-  }
-  return comments
+  )
+  return { comments, stars: allStars }
 }
 
 export default function StarCommentsFeed() {
   const { navigate } = useNavigation()
   const [comments, setComments] = useState<StarComment[] | null>(null)
+  const [knownStars, setKnownStars] = useState<StarRef[]>([])
   const [error, setError] = useState<string | null>(null)
   const [selectedStars, setSelectedStars] = useState<Set<string>>(new Set())
   const [sort, setSort] = useState<SortKey>('latest')
@@ -258,7 +317,8 @@ export default function StarCommentsFeed() {
     }
     loadStarComments()
       .then((next) => {
-        setComments(next)
+        setComments(next.comments)
+        setKnownStars(next.stars)
         setError(null)
       })
       .catch((err) => {
@@ -286,11 +346,13 @@ export default function StarCommentsFeed() {
     }
   }, [load, enabled])
 
+  // 칩: 댓글을 쓴 스타 + 스타 목록 API의 모든 스타(아직 댓글이 없어도 고를 수 있다).
   const stars = useMemo(() => {
     const map = new Map<string, StarRef>()
+    for (const s of knownStars) map.set(s.id, s)
     for (const c of comments ?? []) map.set(c.star.id, c.star)
     return Array.from(map.values())
-  }, [comments])
+  }, [comments, knownStars])
 
   const visible = useMemo(() => {
     const filtered = (comments ?? []).filter((c) => selectedStars.size === 0 || selectedStars.has(c.star.id))
