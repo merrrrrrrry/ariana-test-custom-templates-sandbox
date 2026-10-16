@@ -85,6 +85,7 @@ type SortKey = 'latest' | 'reactions'
 
 const PAGE_SIZE = 50 // star-home feeds는 50으로 실검증됨(최대값은 문서에 없음)
 const VISIBLE_COUNT = 10
+const REFRESH_INTERVAL_MS = 60_000
 // extras는 id를 콤마로 이어 경로에 넣는다 — 한 번에 너무 길어지지 않게 끊어서 호출.
 const EXTRAS_CHUNK = 20
 
@@ -207,16 +208,44 @@ export default function StarCommentsFeed() {
   const [selectedStars, setSelectedStars] = useState<Set<string>>(new Set())
   const [sort, setSort] = useState<SortKey>('latest')
 
-  const load = useCallback(() => {
-    setComments(null)
-    setError(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  // silent=true: 화면은 그대로 두고 조용히 갱신(실패해도 기존 목록 유지).
+  const load = useCallback((silent = false) => {
+    if (silent) {
+      setRefreshing(true)
+    } else {
+      setComments(null)
+      setError(null)
+    }
     loadStarComments()
-      .then(setComments)
-      .catch((err) => setError(err instanceof Error ? err.message : '스타 댓글을 불러오지 못했습니다'))
+      .then((next) => {
+        setComments(next)
+        setError(null)
+      })
+      .catch((err) => {
+        if (!silent) setError(err instanceof Error ? err.message : '스타 댓글을 불러오지 못했습니다')
+      })
+      .finally(() => setRefreshing(false))
   }, [])
 
   useEffect(() => {
     load()
+  }, [load])
+
+  // 열려 있는 동안 스타가 새 댓글을 달아도 보이도록: 탭에 다시 돌아올 때 + 1분마다 갱신.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') load(true)
+    }
+    const timer = window.setInterval(refresh, REFRESH_INTERVAL_MS)
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refresh)
+    }
   }, [load])
 
   const stars = useMemo(() => {
@@ -285,12 +314,27 @@ export default function StarCommentsFeed() {
         </div>
       )}
       {comments && comments.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, margin: '4px 0 16px' }}>
+        <div style={{ display: 'flex', gap: 8, margin: '4px 0 16px', alignItems: 'center' }}>
           <button onClick={() => setSort('latest')} style={chipStyle(sort === 'latest')}>
             최신순
           </button>
           <button onClick={() => setSort('reactions')} style={chipStyle(sort === 'reactions')}>
             반응 많은 순
+          </button>
+          <button
+            onClick={() => load(true)}
+            disabled={refreshing}
+            style={{
+              ...textStyle('13/body/semibold'),
+              marginLeft: 'auto',
+              border: 'none',
+              background: 'transparent',
+              color: color.text.secondary,
+              cursor: refreshing ? 'default' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {refreshing ? '갱신 중…' : '새로고침'}
           </button>
         </div>
       )}
@@ -299,7 +343,7 @@ export default function StarCommentsFeed() {
         <div style={{ ...textStyle('14/body/reg'), color: color.text.secondary }}>
           {error}{' '}
           <button
-            onClick={load}
+            onClick={() => load()}
             style={{ ...textStyle('14/body/semibold'), border: 'none', background: 'transparent', color: color.text.primary, cursor: 'pointer' }}
           >
             다시 시도
@@ -313,7 +357,7 @@ export default function StarCommentsFeed() {
         <p style={{ ...textStyle('14/body/reg'), color: color.text.secondary, margin: 0 }}>
           아직 스타 댓글이 없어요.{' '}
           <button
-            onClick={load}
+            onClick={() => load()}
             style={{ ...textStyle('14/body/semibold'), border: 'none', background: 'transparent', color: color.text.primary, cursor: 'pointer' }}
           >
             새로고침
