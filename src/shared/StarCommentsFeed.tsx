@@ -86,6 +86,16 @@ type SortKey = 'latest' | 'reactions'
 const PAGE_SIZE = 50 // star-home feeds는 50으로 실검증됨(최대값은 문서에 없음)
 const VISIBLE_COUNT = 10
 const REFRESH_INTERVAL_MS = 60_000
+const ENABLED_STORAGE_KEY = 'star-comments-feed-enabled'
+
+// 기본은 켜짐. 사용자가 끈 적이 있으면('0') 꺼진 채로 시작한다.
+function readEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(ENABLED_STORAGE_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
 // extras는 id를 콤마로 이어 경로에 넣는다 — 한 번에 너무 길어지지 않게 끊어서 호출.
 const EXTRAS_CHUNK = 20
 
@@ -209,6 +219,15 @@ export default function StarCommentsFeed() {
   const [sort, setSort] = useState<SortKey>('latest')
 
   const [refreshing, setRefreshing] = useState(false)
+  const [enabled, setEnabled] = useState(readEnabled)
+  const setEnabledAndSave = (next: boolean) => {
+    setEnabled(next)
+    try {
+      window.localStorage.setItem(ENABLED_STORAGE_KEY, next ? '1' : '0')
+    } catch {
+      // 저장소를 못 써도(시크릿 모드 등) 이번 방문 동안은 동작한다.
+    }
+  }
 
   // silent=true: 화면은 그대로 두고 조용히 갱신(실패해도 기존 목록 유지).
   const load = useCallback((silent = false) => {
@@ -230,11 +249,12 @@ export default function StarCommentsFeed() {
   }, [])
 
   useEffect(() => {
-    load()
-  }, [load])
+    if (enabled) load()
+  }, [load, enabled])
 
   // 열려 있는 동안 스타가 새 댓글을 달아도 보이도록: 탭에 다시 돌아올 때 + 1분마다 갱신.
   useEffect(() => {
+    if (!enabled) return
     const refresh = () => {
       if (document.visibilityState === 'visible') load(true)
     }
@@ -246,7 +266,7 @@ export default function StarCommentsFeed() {
       document.removeEventListener('visibilitychange', refresh)
       window.removeEventListener('focus', refresh)
     }
-  }, [load])
+  }, [load, enabled])
 
   const stars = useMemo(() => {
     const map = new Map<string, StarRef>()
@@ -293,12 +313,41 @@ export default function StarCommentsFeed() {
         boxSizing: 'border-box',
       }}
     >
-      <h2 style={{ ...textStyle('20/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>
-        스타의 댓글 모아보기
-      </h2>
-      <p style={{ ...textStyle('13/body/reg'), color: color.text.secondary, margin: '0 0 16px' }}>
-        스타가 남긴 댓글을 한곳에서 확인해보세요
-      </p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <h2 style={{ ...textStyle('20/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>
+          스타의 댓글 모아보기
+        </h2>
+        {/* 켜기/끄기: 끄면 목록을 접고 불러오기도 멈춘다. 선택은 이 브라우저에 기억한다. */}
+        <button
+          role="switch"
+          aria-checked={enabled}
+          aria-label="스타 댓글 모아보기 켜기/끄기"
+          onClick={() => setEnabledAndSave(!enabled)}
+          style={{
+            flexShrink: 0,
+            width: 44,
+            height: 26,
+            padding: 3,
+            border: 'none',
+            borderRadius: 999,
+            cursor: 'pointer',
+            display: 'flex',
+            justifyContent: enabled ? 'flex-end' : 'flex-start',
+            background: enabled ? color.surface['form-inverted'] : color.bg['grouped-weak'],
+          }}
+        >
+          <span style={{ width: 20, height: 20, borderRadius: 999, background: enabled ? color.text['invert-a'] : color.text.secondary }} />
+        </button>
+      </div>
+      {enabled ? (
+        <p style={{ ...textStyle('13/body/reg'), color: color.text.secondary, margin: '0 0 16px' }}>
+          스타가 남긴 댓글을 한곳에서 확인해보세요
+        </p>
+      ) : (
+        <p style={{ ...textStyle('13/body/reg'), color: color.text.secondary, margin: 0 }}>꺼져 있어요. 스위치를 켜면 다시 보여드려요.</p>
+      )}
+      {enabled && (
+        <>
 
       {/* 필터: 스타 선택(복수) + 정렬 */}
       {stars.length > 0 && (
@@ -451,6 +500,8 @@ export default function StarCommentsFeed() {
           </button>
         ))}
       </div>
+        </>
+      )}
     </section>
   )
 }
