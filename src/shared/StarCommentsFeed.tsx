@@ -94,6 +94,10 @@ const RESPONSIVE_CSS = `
 .scf-root { --scf-gutter: 16px; --scf-gap: 12px; width: 100%; max-width: 1080px; margin: 0 auto; box-sizing: border-box; padding: 24px var(--scf-gutter); }
 .scf-chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 var(--scf-gutter) 8px; margin: 0 calc(-1 * var(--scf-gutter)); scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .scf-chips::-webkit-scrollbar { display: none; }
+.scf-sort { position: relative; display: inline-flex; align-items: center; }
+.scf-sort select { appearance: none; -webkit-appearance: none; min-height: 36px; padding: 0 32px 0 14px; border: 1px solid var(--scf-sort-border); border-radius: 999px; background: transparent; cursor: pointer; font-family: inherit; }
+.scf-sort select:focus-visible { outline: 2px solid var(--scf-sort-border); outline-offset: 2px; }
+.scf-sort svg { position: absolute; right: 12px; pointer-events: none; }
 .scf-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--scf-gap); }
 @media (min-width: 668px) {
   .scf-root { --scf-gutter: 32px; --scf-gap: 16px; padding-top: 32px; padding-bottom: 32px; }
@@ -236,7 +240,6 @@ export default function StarCommentsFeed() {
   const [selectedStars, setSelectedStars] = useState<Set<string>>(new Set())
   const [sort, setSort] = useState<SortKey>('latest')
 
-  const [refreshing, setRefreshing] = useState(false)
   const [enabled, setEnabled] = useState(readEnabled)
   const setEnabledAndSave = (next: boolean) => {
     setEnabled(next)
@@ -249,9 +252,7 @@ export default function StarCommentsFeed() {
 
   // silent=true: 화면은 그대로 두고 조용히 갱신(실패해도 기존 목록 유지).
   const load = useCallback((silent = false) => {
-    if (silent) {
-      setRefreshing(true)
-    } else {
+    if (!silent) {
       setComments(null)
       setError(null)
     }
@@ -263,7 +264,6 @@ export default function StarCommentsFeed() {
       .catch((err) => {
         if (!silent) setError(err instanceof Error ? err.message : '스타 댓글을 불러오지 못했습니다')
       })
-      .finally(() => setRefreshing(false))
   }, [])
 
   useEffect(() => {
@@ -322,7 +322,10 @@ export default function StarCommentsFeed() {
   })
 
   return (
-    <section className="scf-root" style={{ background: color.bg.base }}>
+    <section
+      className="scf-root"
+      style={{ background: color.bg.base, ['--scf-sort-border' as string]: color.border['default-a'] }}
+    >
       <style>{RESPONSIVE_CSS}</style>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <h2 style={{ ...textStyle('20/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>
@@ -374,28 +377,32 @@ export default function StarCommentsFeed() {
         </div>
       )}
       {comments && comments.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, margin: '4px 0 16px', alignItems: 'center' }}>
-          <button onClick={() => setSort('latest')} style={chipStyle(sort === 'latest')}>
-            최신순
-          </button>
-          <button onClick={() => setSort('reactions')} style={chipStyle(sort === 'reactions')}>
-            반응 많은 순
-          </button>
-          <button
-            onClick={() => load(true)}
-            disabled={refreshing}
-            style={{
-              ...textStyle('13/body/semibold'),
-              marginLeft: 'auto',
-              border: 'none',
-              background: 'transparent',
-              color: color.text.secondary,
-              cursor: refreshing ? 'default' : 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {refreshing ? '갱신 중…' : '새로고침'}
-          </button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '4px 0 12px' }}>
+          {/* 정렬: 네이티브 select를 알약 모양으로 — 모바일에서는 OS 선택창이 열려 누르기 편하다. */}
+          <label className="scf-sort">
+            <select
+              aria-label="정렬"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey)}
+              style={{ ...textStyle('13/body/semibold'), color: color.text.primary }}
+            >
+              <option value="latest">최신순</option>
+              <option value="reactions">반응 많은 순</option>
+            </select>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              aria-hidden="true"
+              fill="none"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ stroke: color.icon['secondary-a'] }}
+            >
+              <path d="M2.5 4.5 6 8l3.5-3.5" />
+            </svg>
+          </label>
         </div>
       )}
 
@@ -415,13 +422,7 @@ export default function StarCommentsFeed() {
       )}
       {!error && comments !== null && comments.length === 0 && (
         <p style={{ ...textStyle('14/body/reg'), color: color.text.secondary, margin: 0 }}>
-          아직 스타 댓글이 없어요.{' '}
-          <button
-            onClick={() => load()}
-            style={{ ...textStyle('14/body/semibold'), border: 'none', background: 'transparent', color: color.text.primary, cursor: 'pointer' }}
-          >
-            새로고침
-          </button>
+          아직 스타 댓글이 없어요.
         </p>
       )}
       {!error && comments !== null && comments.length > 0 && visible.length === 0 && (
