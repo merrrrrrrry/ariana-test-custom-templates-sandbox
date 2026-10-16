@@ -285,6 +285,10 @@ async function loadCommunityStarComments(): Promise<StarComment[]> {
   return lists.flat()
 }
 
+// 출처 필터 칩 이름·순서
+const KIND_NAME: Record<ContentKind, string> = { contents: '콘텐츠', story: '스타 스토리', community: '커뮤니티' }
+const KIND_ORDER: ContentKind[] = ['contents', 'story', 'community']
+
 // 카드 아래 링크 문구 — 원글이 어디서 온 글인지 한눈에 알 수 있게 출처를 문구에 넣는다.
 const LINK_LABEL: Record<ContentKind, string> = {
   contents: '콘텐츠 보러가기',
@@ -462,21 +466,44 @@ export default function StarCommentsFeed() {
   }, [comments, knownStars])
 
   const [shownCount, setShownCount] = useState(VISIBLE_COUNT)
+  const [selectedKinds, setSelectedKinds] = useState<Set<ContentKind>>(new Set())
   const { visible, total } = useMemo(() => {
-    const filtered = (comments ?? []).filter((c) => selectedStars.size === 0 || selectedStars.has(c.star.id))
+    const filtered = (comments ?? []).filter(
+      (c) =>
+        (selectedStars.size === 0 || selectedStars.has(c.star.id)) && (selectedKinds.size === 0 || selectedKinds.has(c.kind))
+    )
     const sorted = [...filtered].sort((a, b) =>
       sort === 'latest' ? b.createdAt - a.createdAt : b.reactions - a.reactions || b.createdAt - a.createdAt
     )
     return { visible: sorted.slice(0, shownCount), total: sorted.length }
-  }, [comments, selectedStars, sort, shownCount])
+  }, [comments, selectedStars, selectedKinds, sort, shownCount])
 
-  const toggleStar = (id: string) =>
+  // 출처별 개수(스타 선택과 무관하게 전체 기준) — 칩에 함께 보여 준다.
+  const kindCounts = useMemo(() => {
+    const counts: Record<ContentKind, number> = { contents: 0, story: 0, community: 0 }
+    for (const c of comments ?? []) counts[c.kind] += 1
+    return counts
+  }, [comments])
+
+  // 필터를 바꾸면 처음 12개부터 다시 보여 준다.
+  const toggleStar = (id: string) => {
+    setShownCount(VISIBLE_COUNT)
     setSelectedStars((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
+  }
+  const toggleKind = (kind: ContentKind) => {
+    setShownCount(VISIBLE_COUNT)
+    setSelectedKinds((prev) => {
+      const next = new Set(prev)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      return next
+    })
+  }
 
   const chipStyle = (active: boolean) => ({
     ...textStyle('13/body/semibold'),
@@ -489,6 +516,13 @@ export default function StarCommentsFeed() {
     flexShrink: 0,
     background: active ? color.surface['form-inverted'] : color.bg['grouped-weak'],
     color: active ? color.text['invert-a'] : color.text.primary,
+  })
+
+  // 출처 칩은 스타 칩과 헷갈리지 않게 테두리 모양으로 구분한다.
+  const kindChipStyle = (active: boolean) => ({
+    ...chipStyle(active),
+    background: active ? color.surface['form-inverted'] : 'transparent',
+    boxShadow: active ? 'none' : `inset 0 0 0 1px ${color.border['default-a']}`,
   })
 
   return (
@@ -533,15 +567,39 @@ export default function StarCommentsFeed() {
       {enabled && (
         <>
 
-      {/* 필터: 스타 선택(복수) + 정렬 */}
+      {/* 필터: 스타 선택(복수) · 출처 선택(복수) + 정렬 */}
       {stars.length > 0 && (
         <div className="scf-chips">
-          <button onClick={() => setSelectedStars(new Set())} style={chipStyle(selectedStars.size === 0)}>
+          <button
+            onClick={() => {
+              setShownCount(VISIBLE_COUNT)
+              setSelectedStars(new Set())
+            }}
+            style={chipStyle(selectedStars.size === 0)}
+          >
             전체 스타
           </button>
           {stars.map((star) => (
             <button key={star.id} onClick={() => toggleStar(star.id)} style={chipStyle(selectedStars.has(star.id))}>
               {star.nickname}
+            </button>
+          ))}
+        </div>
+      )}
+      {comments && comments.length > 0 && (
+        <div className="scf-chips" aria-label="출처 필터">
+          <button
+            onClick={() => {
+              setShownCount(VISIBLE_COUNT)
+              setSelectedKinds(new Set())
+            }}
+            style={kindChipStyle(selectedKinds.size === 0)}
+          >
+            전체 출처
+          </button>
+          {KIND_ORDER.map((kind) => (
+            <button key={kind} onClick={() => toggleKind(kind)} style={kindChipStyle(selectedKinds.has(kind))}>
+              {KIND_NAME[kind]} {kindCounts[kind]}
             </button>
           ))}
         </div>
@@ -596,7 +654,7 @@ export default function StarCommentsFeed() {
         </p>
       )}
       {!error && comments !== null && comments.length > 0 && visible.length === 0 && (
-        <p style={{ ...textStyle('14/body/reg'), color: color.text.secondary, margin: 0 }}>선택한 스타의 댓글이 없어요.</p>
+        <p style={{ ...textStyle('14/body/reg'), color: color.text.secondary, margin: 0 }}>선택한 조건에 맞는 스타 댓글이 없어요.</p>
       )}
 
       <div className="scf-grid">
