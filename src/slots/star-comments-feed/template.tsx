@@ -4,16 +4,18 @@ import { color, shadow, textStyle } from '@bstage-sdk/design/user'
 import { client } from '../../shared/client'
 
 // ────────────────────────────────────────────────────────────────────────
-// 콘텐츠 홈 · 스타 댓글 모아보기
-// 자리: user.contents-home.contents-section:after (콘텐츠 섹션 묶음 아래)
+// 라운지 스토리 · 스타 댓글 모아보기
+// 자리: user.lounge-story.feed:before (라운지 스토리 피드 영역 위, /lounge/{handle}/story)
+// 이 자리는 context를 주지 않으므로 라운지 핸들은 현재 주소에서 읽는다.
 //
-// 데이터 출처 (스타 댓글을 작성자별로 모아 주는 API는 없다 — 아래 둘을 조합):
-//   1) GET /home/v1/content-home/sections/curation  → contents.items[]
-//   2) GET /home/v1/content-home/shows             → shows[]
-//      각 항목: typeId(콘텐츠 id) · title · commentedStars[] · reactionCounts
-//   3) GET /content/v1/contents/{ids}/extras?preferStarComment=true
-//      → id별 latestComment(스타 댓글 우선) · 최신 reactionCounts/commentCount
-// 한계: 콘텐츠당 "스타의 최신 댓글 1개"만 모은다(전체 댓글 이력은 아님).
+// 데이터 출처 (스타 댓글을 작성자별로 모아 주는 API는 없다 — 아래를 조합):
+//   1) GET /home/v1/star-home/lounges/{handle}/feeds  → items[]
+//      (핸들을 못 읽으면 GET /home/v1/star-home/feeds 로 대체)
+//      각 항목: typeId(글 id) · title · commentedStars[] · latestComment
+//   2) GET /content/v1/contents/{ids}/extras?preferStarComment=true
+//      → id별 latestComment(스타 댓글 우선) · 최신 reactionCounts
+//      (실패하거나 비어 있으면 1)의 latestComment를 그대로 쓴다)
+// 한계: 글당 "스타의 최신 댓글 1개"만 모은다(전체 댓글 이력은 아님).
 // ────────────────────────────────────────────────────────────────────────
 
 interface StarRef {
@@ -34,7 +36,9 @@ interface CommentRaw {
 interface ContentItem {
   typeId: string
   title?: string
+  description?: string
   commentedStars?: StarRef[]
+  latestComment?: CommentRaw
 }
 
 interface ContentExtras {
@@ -42,12 +46,8 @@ interface ContentExtras {
   commentedStars?: StarRef[]
 }
 
-interface CurationResponse {
-  contents?: { items?: ContentItem[] }
-}
-
-interface ShowsResponse {
-  shows?: ContentItem[]
+interface FeedsResponse {
+  items?: ContentItem[]
 }
 
 type ExtrasMap = Record<string, ContentExtras>
@@ -64,7 +64,7 @@ interface StarComment {
 
 type SortKey = 'latest' | 'reactions'
 
-const PAGE_SIZE = 100
+const PAGE_SIZE = 50 // star-home feeds는 50으로 실검증됨(최대값은 문서에 없음)
 const VISIBLE_COUNT = 10
 // extras는 id를 콤마로 이어 경로에 넣는다 — 한 번에 너무 길어지지 않게 끊어서 호출.
 const EXTRAS_CHUNK = 20
@@ -93,21 +93,25 @@ function timeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString('ko-KR')
 }
 
-async function loadStarComments(): Promise<StarComment[]> {
-  const [curation, shows] = await Promise.all([
-    client
-      .get<CurationResponse>('/home/v1/content-home/sections/curation', { params: { page: 1, pageSize: PAGE_SIZE } })
-      .then((res) => res.data?.contents?.items ?? [])
-      .catch(() => [] as ContentItem[]),
-    client
-      .get<ShowsResponse>('/home/v1/content-home/shows')
-      .then((res) => res.data?.shows ?? [])
-      .catch(() => [] as ContentItem[]),
-  ])
+// /lounge/{handle}/story 에서 핸들을 읽는다. 못 읽으면 null → 전체 스타 피드로 대체.
+function readLoungeHandle(): string | null {
+  const match = window.location.pathname.match(/\/lounge\/([^/]+)\/story/)
+  return match ? decodeURIComponent(match[1]) : null
+}
 
-  // 중복 제거 + 스타가 댓글을 단 콘텐츠만 남긴다.
+async function loadStarComments(): Promise<StarComment[]> {
+  const handle = readLoungeHandle()
+  const feeds = await (handle
+    ? client.get<FeedsResponse>('/home/v1/star-home/lounges/{loungeHandle}/feeds', {
+        path: { loungeHandle: handle },
+        params: { page: 1, pageSize: PAGE_SIZE },
+      })
+    : client.get<FeedsResponse>('/home/v1/star-home/feeds', { params: { page: 1, pageSize: PAGE_SIZE } })
+  ).then((res) => res.data?.items ?? [])
+
+  // 중복 제거 + 스타가 댓글을 단 글만 남긴다.
   const byId = new Map<string, ContentItem>()
-  for (const item of [...curation, ...shows]) {
+  for (const item of feeds) {
     if (item?.typeId && (item.commentedStars?.length ?? 0) > 0 && !byId.has(item.typeId)) {
       byId.set(item.typeId, item)
     }
@@ -129,7 +133,8 @@ async function loadStarComments(): Promise<StarComment[]> {
 
   const comments: StarComment[] = []
   for (const content of contents) {
-    const comment = extras[content.typeId]?.latestComment
+    // extras(스타 댓글 우선)가 비면 피드가 준 latestComment로 대체.
+    const comment = extras[content.typeId]?.latestComment ?? content.latestComment
     const author = comment?.author
     if (!comment || !author || !comment.body) continue
     // 작성자가 "댓글 단 스타" 목록에 있을 때만 스타 댓글로 인정한다.
@@ -138,7 +143,7 @@ async function loadStarComments(): Promise<StarComment[]> {
     comments.push({
       commentId: comment.id,
       contentId: content.typeId,
-      contentTitle: content.title || '(제목 없음)',
+      contentTitle: content.title || content.description || '(제목 없음)',
       star: author,
       body: comment.body,
       createdAt: comment.createdAt ? Date.parse(comment.createdAt) : 0,
@@ -202,7 +207,16 @@ function StarCommentsFeed() {
   })
 
   return (
-    <section style={{ padding: '32px 20px', background: color.bg.base, boxSizing: 'border-box' }}>
+    <section
+      style={{
+        width: '100%',
+        maxWidth: 680,
+        margin: '0 auto',
+        padding: '24px 16px',
+        background: color.bg.base,
+        boxSizing: 'border-box',
+      }}
+    >
       <h2 style={{ ...textStyle('20/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>
         스타의 댓글 모아보기
       </h2>
@@ -267,7 +281,7 @@ function StarCommentsFeed() {
         {visible.map((c) => (
           <button
             key={c.commentId}
-            onClick={() => navigate(`/contents/${c.contentId}`)}
+            onClick={() => navigate(`/story/feed/${c.contentId}`)}
             style={{
               display: 'block',
               width: '100%',
@@ -354,5 +368,5 @@ export default StarCommentsFeed
 
 createTemplate(StarCommentsFeed, {
   name: 'star-comments-feed',
-  slot: 'user.contents-home.contents-section:after',
+  slot: 'user.lounge-story.feed:before',
 })
