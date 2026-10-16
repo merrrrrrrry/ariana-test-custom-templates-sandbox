@@ -84,8 +84,26 @@ interface StarComment {
 type SortKey = 'latest' | 'reactions'
 
 const PAGE_SIZE = 50 // star-home feeds는 50으로 실검증됨(최대값은 문서에 없음)
-const VISIBLE_COUNT = 10
+const VISIBLE_COUNT = 12 // 1·2·3열 어디서든 마지막 줄이 비지 않는 수
 const REFRESH_INTERVAL_MS = 60_000
+
+// 반응형 레이아웃 — 플랫폼 콘텐츠 섹션과 같은 규칙:
+//   컨테이너 최대 1080px 가운데 정렬, 좌우 여백 16px(모바일) → 32px(668px 이상).
+//   카드 목록: 1열(모바일) → 2열(668px~) → 3열(1000px~). Shadow DOM 안이라 <style>로 넣는다.
+const RESPONSIVE_CSS = `
+.scf-root { --scf-gutter: 16px; --scf-gap: 12px; width: 100%; max-width: 1080px; margin: 0 auto; box-sizing: border-box; padding: 24px var(--scf-gutter); }
+.scf-chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 var(--scf-gutter) 8px; margin: 0 calc(-1 * var(--scf-gutter)); scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.scf-chips::-webkit-scrollbar { display: none; }
+.scf-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--scf-gap); }
+@media (min-width: 668px) {
+  .scf-root { --scf-gutter: 32px; --scf-gap: 16px; padding-top: 32px; padding-bottom: 32px; }
+  .scf-chips { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0 0 8px; }
+  .scf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1000px) {
+  .scf-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+`
 const ENABLED_STORAGE_KEY = 'star-comments-feed-enabled'
 
 // 기본은 켜짐. 사용자가 끈 적이 있으면('0') 꺼진 채로 시작한다.
@@ -294,7 +312,8 @@ export default function StarCommentsFeed() {
     ...textStyle('13/body/semibold'),
     border: 'none',
     borderRadius: 999,
-    padding: '7px 14px',
+    padding: '8px 14px',
+    minHeight: 36, // 터치하기 편한 최소 높이
     cursor: 'pointer',
     whiteSpace: 'nowrap' as const,
     flexShrink: 0,
@@ -303,16 +322,8 @@ export default function StarCommentsFeed() {
   })
 
   return (
-    <section
-      style={{
-        width: '100%',
-        maxWidth: 680,
-        margin: '0 auto',
-        padding: '24px 16px',
-        background: color.bg.base,
-        boxSizing: 'border-box',
-      }}
-    >
+    <section className="scf-root" style={{ background: color.bg.base }}>
+      <style>{RESPONSIVE_CSS}</style>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <h2 style={{ ...textStyle('20/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>
           스타의 댓글 모아보기
@@ -351,7 +362,7 @@ export default function StarCommentsFeed() {
 
       {/* 필터: 스타 선택(복수) + 정렬 */}
       {stars.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
+        <div className="scf-chips">
           <button onClick={() => setSelectedStars(new Set())} style={chipStyle(selectedStars.size === 0)}>
             전체 스타
           </button>
@@ -417,14 +428,18 @@ export default function StarCommentsFeed() {
         <p style={{ ...textStyle('14/body/reg'), color: color.text.secondary, margin: 0 }}>선택한 스타의 댓글이 없어요.</p>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="scf-grid">
         {visible.map((c) => (
           <button
             key={c.commentId}
             onClick={() => navigate(c.kind === 'contents' ? `/contents/${c.contentId}` : `/story/feed/${c.contentId}`)}
             style={{
-              display: 'block',
+              display: 'flex',
+              flexDirection: 'column',
               width: '100%',
+              minWidth: 0,
+              height: '100%',
+              boxSizing: 'border-box',
               textAlign: 'left',
               border: `1px solid ${color.border['default-a']}`,
               borderRadius: 16,
@@ -456,6 +471,8 @@ export default function StarCommentsFeed() {
                 ...textStyle('15/body/reg'),
                 color: color.text.primary,
                 margin: '0 0 12px',
+                flex: 1,
+                overflowWrap: 'anywhere',
                 whiteSpace: 'pre-wrap',
                 display: '-webkit-box',
                 WebkitLineClamp: 3,
