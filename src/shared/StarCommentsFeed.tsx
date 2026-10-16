@@ -135,6 +135,16 @@ function sumReactions(counts: Record<string, number> | undefined): number {
   return Object.values(counts).reduce((sum, n) => sum + (typeof n === 'number' ? n : 0), 0)
 }
 
+// API가 &quot; &amp; 같은 HTML 엔티티를 그대로 주는 글이 있다. React는 텍스트를 이스케이프하므로
+// 그대로 두면 "&quot;"가 화면에 보인다. textarea는 엔티티만 풀고 태그는 글자 그대로 두며,
+// 결과는 React가 텍스트로만 그리므로 HTML로 해석되지 않는다.
+function decodeEntities(text: string): string {
+  if (!text.includes('&')) return text
+  const el = document.createElement('textarea')
+  el.innerHTML = text
+  return el.value
+}
+
 function chunk<T>(list: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
@@ -262,9 +272,9 @@ async function loadCommunityStarComments(): Promise<StarComment[]> {
           contentId: post.id,
           boardId: board.id,
           kind: 'community',
-          contentTitle: post.title || post.description || '(제목 없음)',
+          contentTitle: decodeEntities(post.title || post.description || '(제목 없음)'),
           star: comment.author,
-          body: comment.body,
+          body: decodeEntities(comment.body),
           createdAt: comment.createdAt ? Date.parse(comment.createdAt) : 0,
           reactions: sumReactions(comment.reactionCounts),
         })
@@ -376,9 +386,9 @@ async function loadStoryAndContentsStarComments(): Promise<{ comments: StarComme
           commentId: comment.id,
           contentId: content.typeId,
           kind: content.kind ?? 'story',
-          contentTitle: content.title || content.description || '(제목 없음)',
+          contentTitle: decodeEntities(content.title || content.description || '(제목 없음)'),
           star: author,
-          body: comment.body,
+          body: decodeEntities(comment.body),
           createdAt: comment.createdAt ? Date.parse(comment.createdAt) : 0,
           reactions: reactionsById.get(comment.id) ?? sumReactions(comment.reactionCounts),
         })
