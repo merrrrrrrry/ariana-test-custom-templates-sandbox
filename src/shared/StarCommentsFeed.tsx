@@ -275,6 +275,13 @@ async function loadCommunityStarComments(): Promise<StarComment[]> {
   return lists.flat()
 }
 
+// 카드 아래 링크 문구 — 원글이 어디서 온 글인지 한눈에 알 수 있게 출처를 문구에 넣는다.
+const LINK_LABEL: Record<ContentKind, string> = {
+  contents: '콘텐츠 보러가기',
+  story: '스타 스토리 보러가기',
+  community: '커뮤니티 글 보러가기',
+}
+
 function detailPath(c: StarComment): string {
   if (c.kind === 'contents') return `/contents/${c.contentId}`
   if (c.kind === 'community') return `/community/board/${c.boardId}/post/${c.contentId}`
@@ -352,8 +359,9 @@ async function loadStoryAndContentsStarComments(): Promise<{ comments: StarComme
       const latest = extras[content.typeId]?.latestComment ?? content.latestComment
       const starIds = new Set((extras[content.typeId]?.commentedStars ?? content.commentedStars ?? []).map((s) => s.id))
 
-      // 글의 스타 댓글 전부(여러 스타·여러 개). 실패하면 최신 스타 댓글 1개로 대체한다.
-      const raws = (await loadStarCommentsOf(content.typeId)) ?? (latest ? [latest] : [])
+      // 글의 스타 댓글 전부(여러 스타·여러 개). 실패하거나 비어 있으면 최신 스타 댓글 1개로 대체한다.
+      const fetched = await loadStarCommentsOf(content.typeId)
+      const raws = fetched && fetched.length > 0 ? fetched : latest ? [latest] : []
       // 반응 수는 스타 댓글 목록에 없어서 일반 댓글 목록 + extras의 최신 댓글에서 id로 찾아 붙인다.
       const reactionsById = raws.length > 0 ? await loadReactionCounts(content.typeId) : new Map<string, number>()
       if (latest?.id) reactionsById.set(latest.id, sumReactions(latest.reactionCounts))
@@ -664,7 +672,7 @@ export default function StarCommentsFeed() {
                 </span>
               )}
               <span style={{ ...textStyle('12/caption/semibold'), color: color.text.primary, flexShrink: 0 }}>
-                원글 보기 ›
+                {LINK_LABEL[c.kind]} ›
               </span>
             </div>
           </button>
