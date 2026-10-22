@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigation } from '@bstage-sdk/react'
 import { color, shadow, textStyle } from '@bstage-sdk/design/user'
 import { client } from './client'
+import { isLoggedIn } from './isLoggedIn'
 import { loadStarCommentsConfig } from './loadStarCommentsConfig'
 import { DEFAULT_CONFIG, isVisible, type PlacementKey, type SortKey, type StarCommentsConfig } from './starCommentsConfig'
 
@@ -437,6 +438,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
 
   // 운영자 설정 — 처음 읽기 전(null)에는 목록 대신 "불러오는 중"만 보여 기본 문구가 번쩍이지 않게 한다.
   const [config, setConfig] = useState<StarCommentsConfig | null>(null)
+  // 노출 대상이 "로그인한 팬만"인데 로그인하지 않은 방문자
+  const [audienceBlocked, setAudienceBlocked] = useState(false)
   const defaultsApplied = useRef(false)
 
   // silent=true: 화면은 그대로 두고 조용히 갱신(실패해도 기존 목록 유지).
@@ -454,6 +457,13 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
             setComments([])
             return
           }
+          // 노출 대상 판정 — 지금은 all · login만. membership · pop은 가입 여부 API가 열리면 여기에 붙인다.
+          if (nextConfig.audience === 'login' && !(await isLoggedIn())) {
+            setAudienceBlocked(true)
+            setComments([])
+            return
+          }
+          setAudienceBlocked(false)
           const next = await loadStarComments(nextConfig)
           setComments(next.comments)
           setKnownStars(next.stars)
@@ -592,14 +602,20 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
 
   // 운영자 설정이 아직 안 왔으면 로딩만, 이 자리에서 안 보이게 설정돼 있으면 슬롯은 아무것도 안 그린다
   // (독립 페이지는 빈 화면 대신 안내 문구).
-  const hidden = config !== null && !isVisible(config, placement)
+  const hidden = config !== null && (!isVisible(config, placement) || audienceBlocked)
   if (hidden && placement !== 'page') return null
   if (config === null || hidden) {
     return (
       <section className="scf-root" style={{ background: color.bg.base }}>
         <style>{RESPONSIVE_CSS}</style>
         <p style={{ ...textStyle('14/body/reg'), color: color.text.secondary, margin: 0 }}>
-          {hidden ? '지금은 볼 수 없는 화면이에요.' : error ? error : '불러오는 중…'}
+          {audienceBlocked
+            ? '로그인한 팬만 볼 수 있어요.'
+            : hidden
+              ? '지금은 볼 수 없는 화면이에요.'
+              : error
+                ? error
+                : '불러오는 중…'}
         </p>
       </section>
     )
