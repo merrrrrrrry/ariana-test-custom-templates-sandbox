@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigation } from '@bstage-sdk/react'
 import { color, shadow, textStyle } from '@bstage-sdk/design/user'
 import { client } from './client'
+import { curateComments } from './curateComments'
 import { isLoggedIn } from './isLoggedIn'
 import { loadStarCommentsConfig } from './loadStarCommentsConfig'
 import { DEFAULT_CONFIG, isVisible, type PlacementKey, type SortKey, type StarCommentsConfig } from './starCommentsConfig'
@@ -56,6 +57,8 @@ type ContentKind = 'story' | 'contents' | 'community'
 
 interface ContentItem {
   typeId: string
+  type?: string // FeedItemType — FEED_ITEM_STAR_POST* 는 스타 스토리, 나머지는 콘텐츠
+  tags?: string[]
   title?: string
   description?: string
   commentedStars?: StarRef[]
@@ -312,23 +315,48 @@ async function loadAllStars(): Promise<StarRef[]> {
     .catch(() => [] as StarRef[])
 }
 
+// 태그 필터: 운영자가 정한 태그가 붙은 글만 후보로 쓴다. GET /home/v1/feeds/tagged?tag= (태그된 피드 모아보기).
+// 피드 종류(type)로 스타 스토리 / 콘텐츠를 나누고, 출처 스위치가 꺼진 쪽은 뺀다.
+async function loadTaggedItems(tags: string[], sources: StarCommentsConfig['sources']): Promise<ContentItem[]> {
+  const lists = await Promise.all(
+    tags.map((tag) =>
+      client
+        .get<FeedsResponse>('/home/v1/feeds/tagged', { params: { tag, page: 1, pageSize: PAGE_SIZE } })
+        .then((res) => res.data?.items ?? [])
+        .catch(() => [] as ContentItem[])
+    )
+  )
+  const items: ContentItem[] = []
+  for (const item of lists.flat()) {
+    const kind: ContentKind = item.type?.startsWith('FEED_ITEM_STAR_POST') ? 'story' : 'contents'
+    if (sources[kind]) items.push({ ...item, kind })
+  }
+  return items
+}
+
 async function loadStarComments(config: StarCommentsConfig): Promise<{ comments: StarComment[]; stars: StarRef[] }> {
   const starsPromise = loadAllStars()
-  // 커뮤니티 스타 댓글은 다른 소스와 독립이라 먼저 시작해 두고 마지막에 합친다.
-  const communityPromise = config.sources.community
-    ? loadCommunityStarComments(config.excludedBoards).catch(() => [] as StarComment[])
-    : Promise.resolve([] as StarComment[])
-  const storyContentsPromise = loadStoryAndContentsStarComments(config.sources).catch(() => [] as StarComment[])
+  const tagged = config.tagFilter.enabled
+  // 커뮤니티 스타 댓글은 다른 소스와 독립이라 먼저 시작해 두고 마지막에 합친다. 커뮤니티 글에는 태그가 없어 태그 필터를 켜면 뺀다.
+  const communityPromise =
+    config.sources.community && !tagged
+      ? loadCommunityStarComments(config.excludedBoards).catch(() => [] as StarComment[])
+      : Promise.resolve([] as StarComment[])
+  const storyContentsPromise = loadStoryAndContentsStarComments(config.sources, tagged ? config.tagFilter.tags : null).catch(
+    () => [] as StarComment[]
+  )
   const [stars, community, comments] = await Promise.all([starsPromise, communityPromise, storyContentsPromise])
   const seenIds = new Set(comments.map((c) => c.commentId))
   return { comments: [...comments, ...community.filter((c) => !seenIds.has(c.commentId))], stars }
 }
 
-async function loadStoryAndContentsStarComments(sources: StarCommentsConfig['sources']): Promise<StarComment[]> {
+// tags가 있으면(태그 필터) 그 태그가 붙은 글만 후보로 쓰고, 없으면(null) 기존처럼 홈·피드 전체에서 모은다.
+async function loadStoryAndContentsStarComments(sources: StarCommentsConfig['sources'], tags: string[] | null): Promise<StarComment[]> {
   if (!sources.story && !sources.contents) return []
   const handle = readLoungeHandle()
   const none = Promise.resolve([] as ContentItem[])
-  const [feeds, curation, shows, homeSections] = await Promise.all([
+  const taggedItems = tags ? await loadTaggedItems(tags, sources) : null
+  const [feeds, curation, shows, homeSections] = taggedItems ? [[], [], [], []] as ContentItem[][] : await Promise.all([
     sources.story
       ? (handle
           ? client.get<FeedsResponse>('/home/v1/star-home/lounges/{loungeHandle}/feeds', {
@@ -357,11 +385,12 @@ async function loadStoryAndContentsStarComments(sources: StarCommentsConfig['sou
 
   // 중복 제거 + 스타가 댓글을 단 글만 남긴다. 콘텐츠 쪽을 먼저 넣어 같은 id면 콘텐츠로 본다.
   const byId = new Map<string, ContentItem>()
-  const tagged: ContentItem[] = [
+  const candidates: ContentItem[] = [
     ...[...homeSections, ...curation, ...shows].map((item) => ({ ...item, kind: 'contents' as const })),
     ...feeds.map((item) => ({ ...item, kind: 'story' as const })),
+    ...(taggedItems ?? []),
   ]
-  for (const item of tagged) {
+  for (const item of candidates) {
     if (item?.typeId && (item.commentedStars?.length ?? 0) > 0 && !byId.has(item.typeId)) {
       byId.set(item.typeId, item)
     }
@@ -426,7 +455,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   const [selectedStars, setSelectedStars] = useState<Set<string>>(new Set())
   const [sort, setSort] = useState<SortKey>('latest')
 
-  const [enabled, setEnabled] = useState(readEnabled)
+  // 방문자가 스위치로 고른 상태. 운영자가 스위치를 숨기면(showToggle=false) 이 값은 무시하고 항상 보여 준다.
+  const [visitorEnabled, setEnabled] = useState(readEnabled)
   const setEnabledAndSave = (next: boolean) => {
     setEnabled(next)
     try {
@@ -441,6 +471,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   // 노출 대상이 "로그인한 팬만"인데 로그인하지 않은 방문자
   const [audienceBlocked, setAudienceBlocked] = useState(false)
   const defaultsApplied = useRef(false)
+  const showToggle = config?.showToggle ?? true
+  const enabled = showToggle ? visitorEnabled : true
 
   // silent=true: 화면은 그대로 두고 조용히 갱신(실패해도 기존 목록 유지).
   const load = useCallback(
@@ -453,7 +485,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
         .then(async (nextConfig) => {
           setConfig(nextConfig)
           // 이 자리에서 안 보이는 설정이면(꺼짐 · 기간 밖 · 자리 스위치 OFF) 댓글은 불러오지 않는다.
-          if (!isVisible(nextConfig, placement) || !enabledRef.current) {
+          if (!isVisible(nextConfig, placement) || (nextConfig.showToggle && !enabledRef.current)) {
             setComments([])
             return
           }
@@ -485,8 +517,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   }, [config])
 
   // 방문자가 끈 상태에서도 설정은 읽어야 제목·스위치를 그릴 수 있다. 댓글 조회만 건너뛴다.
-  const enabledRef = useRef(enabled)
-  enabledRef.current = enabled
+  const enabledRef = useRef(visitorEnabled)
+  enabledRef.current = visitorEnabled
   useEffect(() => {
     load()
   }, [load, enabled])
@@ -510,14 +542,26 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   const cfg = config ?? DEFAULT_CONFIG
   const pageSize = cfg.pageSize
 
-  // 운영자가 숨긴 스타(닉네임) · 숨긴 댓글(키워드)을 뺀 댓글
-  const shownComments = useMemo(() => {
-    const hiddenStars = new Set(cfg.hiddenStars)
-    const hiddenWords = cfg.hiddenKeywords.map((word) => word.toLowerCase())
-    return (comments ?? []).filter(
-      (c) => !hiddenStars.has(c.star.nickname) && !hiddenWords.some((word) => c.body.toLowerCase().includes(word))
-    )
-  }, [comments, cfg.hiddenStars, cfg.hiddenKeywords])
+  // 운영자 도우미: 주소에 ?curate=1 이 있으면 카드마다 "ID 복사" 버튼을 보여 준다(어드민 "숨길 댓글 ID"에 붙여 넣는다).
+  // 댓글 ID는 비밀 값이 아니라 누가 켜도 새로 알게 되는 정보가 없다.
+  const curate = useMemo(() => new URLSearchParams(window.location.search).get('curate') === '1', [])
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const copyCommentId = (id: string) => {
+    const done = () => {
+      setCopiedId(id)
+      window.setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500)
+    }
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(id).then(done, () => window.prompt('댓글 ID', id))
+    else window.prompt('댓글 ID', id)
+  }
+
+  // 운영자가 숨긴 스타(닉네임) · 숨긴 댓글(금칙어 · ID) · 반응 수 기준을 뺀 뒤, 글당 최대 개수로 줄인 댓글
+  const shownComments = useMemo(
+    () => curateComments(comments ?? [], cfg),
+    // cfg는 읽을 때마다 새 객체가 될 수 있어 규칙 값들로 비교한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [comments, cfg.hiddenStars, cfg.hiddenKeywords, cfg.hiddenCommentIds, cfg.minReactions, cfg.perPostLimit, cfg.perPostOrder]
+  )
 
   // 칩: 댓글을 쓴 스타 + 스타 목록 API의 모든 스타(아직 댓글이 없어도 고를 수 있다).
   // 운영자가 정한 순서(닉네임)가 앞에 오고, 숨긴 스타는 뺀다.
@@ -629,7 +673,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
       <style>{RESPONSIVE_CSS}</style>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <h2 style={{ ...textStyle('20/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>{cfg.title}</h2>
-        {/* 켜기/끄기: 끄면 목록을 접고 불러오기도 멈춘다. 선택은 이 브라우저에 기억한다. */}
+        {/* 켜기/끄기: 끄면 목록을 접고 불러오기도 멈춘다. 선택은 이 브라우저에 기억한다. 운영자가 숨길 수 있다. */}
+        {showToggle && (
         <button
           role="switch"
           aria-checked={enabled}
@@ -650,6 +695,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
         >
           <span style={{ width: 20, height: 20, borderRadius: 999, background: enabled ? color.text['invert-a'] : color.text.secondary }} />
         </button>
+        )}
       </div>
       {enabled ? (
         cfg.subtitle ? (
@@ -753,8 +799,31 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
 
       <div className="scf-grid">
         {visible.map((c) => (
+          <div key={c.commentId} style={{ position: 'relative', minWidth: 0, display: 'flex' }}>
+          {curate && (
+            // 운영자용: 숨길 댓글 ID를 복사한다. 카드(버튼) 안에 버튼을 넣을 수 없어 카드 위에 겹쳐 둔다.
+            <button
+              type="button"
+              onClick={() => copyCommentId(c.commentId)}
+              style={{
+                ...textStyle('12/caption/semibold'),
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                zIndex: 1,
+                minHeight: 28,
+                padding: '0 10px',
+                borderRadius: 999,
+                border: `1px solid ${color.border['default-a']}`,
+                background: color.bg.base,
+                color: color.text.primary,
+                cursor: 'pointer',
+              }}
+            >
+              {copiedId === c.commentId ? '복사됨' : 'ID 복사'}
+            </button>
+          )}
           <button
-            key={c.commentId}
             onClick={() => navigate(detailPath(c))}
             style={{
               display: 'flex',
@@ -838,6 +907,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
               </span>
             </div>
           </button>
+          </div>
         ))}
       </div>
       {total > visible.length && (
