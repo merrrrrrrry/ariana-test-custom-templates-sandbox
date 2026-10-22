@@ -6,10 +6,8 @@ import { loadStarCommentsConfig } from './loadStarCommentsConfig'
 import { DEFAULT_CONFIG, isVisible, type SortKey, type StarCommentsConfig } from './starCommentsConfig'
 
 // placement: 이 컴포넌트가 놓인 자리('page' 또는 슬롯 id) — 운영자 설정의 자리별 노출 스위치를 가른다.
-// boardId: 커뮤니티 게시판 슬롯일 때 그 게시판 id — 그 게시판의 스타 댓글만 모은다.
 export interface StarCommentsFeedProps {
   placement?: string
-  boardId?: string
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -247,12 +245,10 @@ interface BoardPostsResponse {
 
 // 커뮤니티: 게시판 글은 commentedStars가 비어 있고 글당 스타 댓글 API(comments/stars)도 비어 있다.
 // 그래서 댓글이 있는 최신 글의 최상위 댓글 목록에서 작성자 type이 STAR인 것을 고른다.
-// onlyBoardId: 게시판 슬롯에서는 그 게시판 글만. excludedBoards: 운영자가 제외한 게시판 제목.
-async function loadCommunityStarComments(excludedBoards: string[], onlyBoardId?: string): Promise<StarComment[]> {
+// excludedBoards: 운영자가 제외한 게시판 제목.
+async function loadCommunityStarComments(excludedBoards: string[]): Promise<StarComment[]> {
   const allBoards = (await client.get<BoardSummary[]>('/content/v1/boards')).data ?? []
-  const boards = allBoards.filter((board) =>
-    onlyBoardId ? board.id === onlyBoardId : !excludedBoards.includes((board.title ?? '').trim())
-  )
+  const boards = allBoards.filter((board) => !excludedBoards.includes((board.title ?? '').trim()))
   const postsByBoard = await Promise.all(
     boards.map((board) =>
       client
@@ -314,20 +310,13 @@ async function loadAllStars(): Promise<StarRef[]> {
     .catch(() => [] as StarRef[])
 }
 
-// boardId: 커뮤니티 게시판 슬롯에서는 그 게시판의 스타 댓글만 모은다.
-async function loadStarComments(
-  config: StarCommentsConfig,
-  boardId?: string
-): Promise<{ comments: StarComment[]; stars: StarRef[] }> {
+async function loadStarComments(config: StarCommentsConfig): Promise<{ comments: StarComment[]; stars: StarRef[] }> {
   const starsPromise = loadAllStars()
   // 커뮤니티 스타 댓글은 다른 소스와 독립이라 먼저 시작해 두고 마지막에 합친다.
-  const communityPromise =
-    boardId || config.sources.community
-      ? loadCommunityStarComments(config.excludedBoards, boardId).catch(() => [] as StarComment[])
-      : Promise.resolve([] as StarComment[])
-  const storyContentsPromise = boardId
-    ? Promise.resolve([] as StarComment[])
-    : loadStoryAndContentsStarComments(config.sources).catch(() => [] as StarComment[])
+  const communityPromise = config.sources.community
+    ? loadCommunityStarComments(config.excludedBoards).catch(() => [] as StarComment[])
+    : Promise.resolve([] as StarComment[])
+  const storyContentsPromise = loadStoryAndContentsStarComments(config.sources).catch(() => [] as StarComment[])
   const [stars, community, comments] = await Promise.all([starsPromise, communityPromise, storyContentsPromise])
   const seenIds = new Set(comments.map((c) => c.commentId))
   return { comments: [...comments, ...community.filter((c) => !seenIds.has(c.commentId))], stars }
@@ -427,7 +416,7 @@ async function loadStoryAndContentsStarComments(sources: StarCommentsConfig['sou
   return comments
 }
 
-export default function StarCommentsFeed({ placement = 'page', boardId }: StarCommentsFeedProps = {}) {
+export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFeedProps = {}) {
   const { navigate } = useNavigation()
   const [comments, setComments] = useState<StarComment[] | null>(null)
   const [knownStars, setKnownStars] = useState<StarRef[]>([])
@@ -464,7 +453,7 @@ export default function StarCommentsFeed({ placement = 'page', boardId }: StarCo
             setComments([])
             return
           }
-          const next = await loadStarComments(nextConfig, boardId)
+          const next = await loadStarComments(nextConfig)
           setComments(next.comments)
           setKnownStars(next.stars)
           setError(null)
@@ -473,7 +462,7 @@ export default function StarCommentsFeed({ placement = 'page', boardId }: StarCo
           if (!silent) setError(err instanceof Error ? err.message : '스타 댓글을 불러오지 못했습니다')
         })
     },
-    [placement, boardId]
+    [placement]
   )
 
   // 설정의 기본 정렬은 처음 한 번만 적용한다(방문자가 바꾼 정렬을 갱신 때 되돌리지 않는다).
@@ -676,7 +665,7 @@ export default function StarCommentsFeed({ placement = 'page', boardId }: StarCo
           ))}
         </div>
       )}
-      {!boardId && shownComments.length > 0 && (
+      {shownComments.length > 0 && (
         <div className="scf-chips" aria-label="출처 필터">
           <button
             onClick={() => {
