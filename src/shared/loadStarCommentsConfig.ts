@@ -1,5 +1,6 @@
 import { client } from './client'
 import {
+  CONFIG_CACHE_BUCKET_MS,
   CONFIG_KEY,
   DEFAULT_CONFIG,
   LOCAL_CONFIG_STORAGE_KEY,
@@ -22,10 +23,12 @@ export async function loadStarCommentsConfig(): Promise<StarCommentsConfig> {
       // 저장소를 못 읽어도 아래 기본 흐름으로 간다.
     }
   }
+  const read = (params?: Record<string, number>) =>
+    client.get<unknown>('/home/v1/custom-template-data/{displayKey}', { path: { displayKey: CONFIG_KEY }, params })
   try {
-    const res = await client.get<unknown>('/home/v1/custom-template-data/{displayKey}', {
-      path: { displayKey: CONFIG_KEY },
-    })
+    // 게이트웨이는 같은 주소의 응답을 오래 캐시한다. 주소 끝에 1분마다 바뀌는 값(v)을 붙여
+    // 어드민에서 저장한 설정이 1분 안에 팬 화면에 닿게 한다. 이 요청이 실패하면 값 없이 한 번 더 읽는다.
+    const res = await read({ v: Math.floor(Date.now() / CONFIG_CACHE_BUCKET_MS) }).catch(() => read())
     return parseConfig(unwrapStoredData(res.data))
   } catch {
     return DEFAULT_CONFIG
