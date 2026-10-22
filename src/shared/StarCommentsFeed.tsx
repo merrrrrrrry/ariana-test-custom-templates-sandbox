@@ -3,11 +3,12 @@ import { useNavigation } from '@bstage-sdk/react'
 import { color, shadow, textStyle } from '@bstage-sdk/design/user'
 import { client } from './client'
 import { loadStarCommentsConfig } from './loadStarCommentsConfig'
-import { DEFAULT_CONFIG, isVisible, type SortKey, type StarCommentsConfig } from './starCommentsConfig'
+import { DEFAULT_CONFIG, isVisible, type PlacementKey, type SortKey, type StarCommentsConfig } from './starCommentsConfig'
 
-// placement: 이 컴포넌트가 놓인 자리('page' 또는 슬롯 id) — 운영자 설정의 자리별 노출 스위치를 가른다.
+// placement: 이 컴포넌트가 놓인 자리 키('page' · 'contents-after' …, 슬롯 id가 아님) — 운영자 설정의
+// 자리별 노출 스위치를 가른다.
 export interface StarCommentsFeedProps {
-  placement?: string
+  placement?: PlacementKey
 }
 
 // ────────────────────────────────────────────────────────────────────────
