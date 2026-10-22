@@ -8,7 +8,7 @@ import StarCommentsFeed from '../../shared/StarCommentsFeed'
 export default function StarStoryCommentsPage() {
   return (
     <div style={{ minHeight: '100vh', background: color.bg.base }}>
-      <StarCommentsFeed />
+      <StarCommentsFeed placement="page" />
     </div>
   )
 }
