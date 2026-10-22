@@ -455,7 +455,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   const [selectedStars, setSelectedStars] = useState<Set<string>>(new Set())
   const [sort, setSort] = useState<SortKey>('latest')
 
-  const [enabled, setEnabled] = useState(readEnabled)
+  // 방문자가 스위치로 고른 상태. 운영자가 스위치를 숨기면(showToggle=false) 이 값은 무시하고 항상 보여 준다.
+  const [visitorEnabled, setEnabled] = useState(readEnabled)
   const setEnabledAndSave = (next: boolean) => {
     setEnabled(next)
     try {
@@ -470,6 +471,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   // 노출 대상이 "로그인한 팬만"인데 로그인하지 않은 방문자
   const [audienceBlocked, setAudienceBlocked] = useState(false)
   const defaultsApplied = useRef(false)
+  const showToggle = config?.showToggle ?? true
+  const enabled = showToggle ? visitorEnabled : true
 
   // silent=true: 화면은 그대로 두고 조용히 갱신(실패해도 기존 목록 유지).
   const load = useCallback(
@@ -482,7 +485,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
         .then(async (nextConfig) => {
           setConfig(nextConfig)
           // 이 자리에서 안 보이는 설정이면(꺼짐 · 기간 밖 · 자리 스위치 OFF) 댓글은 불러오지 않는다.
-          if (!isVisible(nextConfig, placement) || !enabledRef.current) {
+          if (!isVisible(nextConfig, placement) || (nextConfig.showToggle && !enabledRef.current)) {
             setComments([])
             return
           }
@@ -514,8 +517,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   }, [config])
 
   // 방문자가 끈 상태에서도 설정은 읽어야 제목·스위치를 그릴 수 있다. 댓글 조회만 건너뛴다.
-  const enabledRef = useRef(enabled)
-  enabledRef.current = enabled
+  const enabledRef = useRef(visitorEnabled)
+  enabledRef.current = visitorEnabled
   useEffect(() => {
     load()
   }, [load, enabled])
@@ -670,7 +673,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
       <style>{RESPONSIVE_CSS}</style>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <h2 style={{ ...textStyle('20/title/semibold'), color: color.text.primary, margin: '0 0 4px' }}>{cfg.title}</h2>
-        {/* 켜기/끄기: 끄면 목록을 접고 불러오기도 멈춘다. 선택은 이 브라우저에 기억한다. */}
+        {/* 켜기/끄기: 끄면 목록을 접고 불러오기도 멈춘다. 선택은 이 브라우저에 기억한다. 운영자가 숨길 수 있다. */}
+        {showToggle && (
         <button
           role="switch"
           aria-checked={enabled}
@@ -691,6 +695,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
         >
           <span style={{ width: 20, height: 20, borderRadius: 999, background: enabled ? color.text['invert-a'] : color.text.secondary }} />
         </button>
+        )}
       </div>
       {enabled ? (
         cfg.subtitle ? (
