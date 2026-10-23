@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigation } from '@bstage-sdk/react'
 import { color, shadow, textStyle } from '@bstage-sdk/design/user'
 import { client } from './client'
-import { curateComments } from './curateComments'
+import { curateComments, pinOrder } from './curateComments'
 import { isLoggedIn } from './isLoggedIn'
 import { loadStarCommentsConfig } from './loadStarCommentsConfig'
 import { DEFAULT_CONFIG, isVisible, type PlacementKey, type SortKey, type StarCommentsConfig } from './starCommentsConfig'
@@ -560,7 +560,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
     () => curateComments(comments ?? [], cfg),
     // cfg는 읽을 때마다 새 객체가 될 수 있어 규칙 값들로 비교한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [comments, cfg.hiddenStars, cfg.hiddenKeywords, cfg.hiddenCommentIds, cfg.minReactions, cfg.perPostLimit, cfg.perPostOrder]
+    [comments, cfg.hiddenStars, cfg.hiddenKeywords, cfg.hiddenCommentIds, cfg.pinnedCommentIds, cfg.minReactions, cfg.perPostLimit, cfg.perPostOrder]
   )
 
   // 칩: 댓글을 쓴 스타 + 스타 목록 API의 모든 스타(아직 댓글이 없어도 고를 수 있다).
@@ -586,16 +586,14 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
       (c) =>
         (selectedStars.size === 0 || selectedStars.has(c.star.id)) && (selectedKinds.size === 0 || selectedKinds.has(c.kind))
     )
-    // 운영자가 고정한 댓글(키워드 포함)은 정렬과 상관없이 맨 위.
-    const pinnedWords = cfg.pinnedKeywords.map((word) => word.toLowerCase())
-    const pinRank = (c: StarComment) => (pinnedWords.some((word) => c.body.toLowerCase().includes(word)) ? 0 : 1)
+    // 운영자가 고정한 댓글(ID)은 정렬과 상관없이 맨 위, 어드민에 적은 순서대로.
     const sorted = [...filtered].sort(
       (a, b) =>
-        pinRank(a) - pinRank(b) ||
+        pinOrder(cfg.pinnedCommentIds, a.commentId) - pinOrder(cfg.pinnedCommentIds, b.commentId) ||
         (sort === 'latest' ? b.createdAt - a.createdAt : b.reactions - a.reactions || b.createdAt - a.createdAt)
     )
     return { visible: sorted.slice(0, pages * pageSize), total: sorted.length }
-  }, [shownComments, selectedStars, selectedKinds, sort, pages, pageSize, cfg.pinnedKeywords])
+  }, [shownComments, selectedStars, selectedKinds, sort, pages, pageSize, cfg.pinnedCommentIds])
 
   // 출처별 개수(스타 선택과 무관하게 전체 기준) — 칩에 함께 보여 준다.
   const kindCounts = useMemo(() => {
