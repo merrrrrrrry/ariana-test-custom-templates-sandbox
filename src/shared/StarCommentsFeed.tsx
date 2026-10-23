@@ -542,6 +542,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   const cfg = config ?? DEFAULT_CONFIG
   const pageSize = cfg.pageSize
 
+  const pinnedIds = useMemo(() => new Set(cfg.pinnedCommentIds), [cfg.pinnedCommentIds])
+
   // 운영자 도우미: 주소에 ?curate=1 이 있으면 카드마다 "ID 복사" 버튼을 보여 준다(어드민 "숨길 댓글 ID"에 붙여 넣는다).
   // 댓글 ID는 비밀 값이 아니라 누가 켜도 새로 알게 되는 정보가 없다.
   const curate = useMemo(() => new URLSearchParams(window.location.search).get('curate') === '1', [])
@@ -831,12 +833,15 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
               height: '100%',
               boxSizing: 'border-box',
               textAlign: 'left',
-              border: `1px solid ${color.border['default-a']}`,
+              border: `1px solid ${pinnedIds.has(c.commentId) ? color.surface['form-inverted'] : color.border['default-a']}`,
               borderRadius: 16,
               padding: 16,
               cursor: 'pointer',
               background: color.surface.card,
-              boxShadow: shadow['default-small'],
+              // 고정한 댓글은 테두리를 한 겹 더 두껍게(레이아웃은 그대로) 보여 준다.
+              boxShadow: pinnedIds.has(c.commentId)
+                ? `inset 0 0 0 1px ${color.surface['form-inverted']}, ${shadow['default-small']}`
+                : shadow['default-small'],
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -852,6 +857,20 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
                 />
               )}
               <span style={{ ...textStyle('14/body/semibold'), color: color.text.primary }}>{c.star.nickname}</span>
+              {pinnedIds.has(c.commentId) && (
+                <span
+                  style={{
+                    ...textStyle('12/caption/semibold'),
+                    flexShrink: 0,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: color.surface['form-inverted'],
+                    color: color.text['invert-a'],
+                  }}
+                >
+                  📌 고정
+                </span>
+              )}
               <span style={{ ...textStyle('12/caption/reg'), color: color.text.tertiary, marginLeft: 'auto' }}>
                 {timeAgo(c.createdAt)}
               </span>
