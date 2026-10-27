@@ -5,7 +5,7 @@ import { client } from './client'
 import { curateComments, pinOrder } from './curateComments'
 import { isLoggedIn } from './isLoggedIn'
 import { loadStarCommentsConfig } from './loadStarCommentsConfig'
-import { DEFAULT_CONFIG, isVisible, type PlacementKey, type SortKey, type StarCommentsConfig } from './starCommentsConfig'
+import { DEFAULT_CONFIG, isVisible, type PlacementKey, type SortKey, type StarCommentsConfig, type ViewMode } from './starCommentsConfig'
 
 // placement: 이 컴포넌트가 놓인 자리 키('page' · 'contents-after' …, 슬롯 id가 아님) — 운영자 설정의
 // 자리별 노출 스위치를 가른다.
@@ -118,6 +118,7 @@ const RESPONSIVE_CSS = `
 .scf-sort select:focus-visible { outline: 2px solid var(--scf-sort-border); outline-offset: 2px; }
 .scf-sort svg { position: absolute; right: 12px; pointer-events: none; }
 .scf-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--scf-gap); }
+.scf-list { display: flex; flex-direction: column; }
 @media (min-width: 668px) {
   .scf-root { --scf-gutter: 32px; --scf-gap: 16px; padding-top: 32px; padding-bottom: 32px; }
   .scf-chips { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0 0 8px; }
@@ -128,6 +129,17 @@ const RESPONSIVE_CSS = `
 }
 `
 const ENABLED_STORAGE_KEY = 'star-comments-feed-enabled'
+const VIEW_STORAGE_KEY = 'star-comments-feed-view'
+
+// 방문자가 고른 보기 방식(운영자가 허용했을 때만 쓴다). 없으면 null → 운영자 기본값.
+function readVisitorView(): ViewMode | null {
+  try {
+    const value = window.localStorage.getItem(VIEW_STORAGE_KEY)
+    return value === 'list' || value === 'block' ? value : null
+  } catch {
+    return null
+  }
+}
 
 // 기본은 켜짐. 사용자가 끈 적이 있으면('0') 꺼진 채로 시작한다.
 function readEnabled(): boolean {
@@ -454,6 +466,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
   const [error, setError] = useState<string | null>(null)
   const [selectedStars, setSelectedStars] = useState<Set<string>>(new Set())
   const [sort, setSort] = useState<SortKey>('latest')
+  const [visitorView, setVisitorView] = useState<ViewMode | null>(readVisitorView)
 
   // 방문자가 스위치로 고른 상태. 운영자가 스위치를 숨기면(showToggle=false) 이 값은 무시하고 항상 보여 준다.
   const [visitorEnabled, setEnabled] = useState(readEnabled)
@@ -541,6 +554,17 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
 
   const cfg = config ?? DEFAULT_CONFIG
   const pageSize = cfg.pageSize
+  // 운영자가 방문자 변경을 허용했고 방문자가 고른 적이 있으면 그 값, 아니면 운영자 기본값.
+  const viewMode: ViewMode = cfg.allowViewSwitch && visitorView ? visitorView : cfg.viewMode
+  const asList = viewMode === 'list'
+  const chooseView = (next: ViewMode) => {
+    setVisitorView(next)
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next)
+    } catch {
+      // 저장소를 못 써도(시크릿 모드 등) 이번 방문 동안은 동작한다.
+    }
+  }
 
   const pinnedIds = useMemo(() => new Set(cfg.pinnedCommentIds), [cfg.pinnedCommentIds])
 
@@ -747,7 +771,57 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
         </div>
       )}
       {shownComments.length > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '4px 0 12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, margin: '4px 0 12px' }}>
+          {/* 보기 방식 전환(운영자가 허용했을 때만): 블록 / 리스트 */}
+          {cfg.allowViewSwitch && (
+            <div role="group" aria-label="보기 방식" style={{ display: 'inline-flex', gap: 4 }}>
+              {(
+                [
+                  ['block', '블록으로 보기'],
+                  ['list', '리스트로 보기'],
+                ] as const
+              ).map(([mode, label]) => {
+                const active = viewMode === mode
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-label={label}
+                    aria-pressed={active}
+                    title={label}
+                    onClick={() => chooseView(mode)}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: 999,
+                      cursor: 'pointer',
+                      border: active ? 'none' : `1px solid ${color.border['default-a']}`,
+                      background: active ? color.surface['form-inverted'] : 'transparent',
+                      color: active ? color.text['invert-a'] : color.text.primary,
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      {mode === 'block' ? (
+                        <>
+                          <rect x="2" y="2" width="5" height="5" rx="1" />
+                          <rect x="9" y="2" width="5" height="5" rx="1" />
+                          <rect x="2" y="9" width="5" height="5" rx="1" />
+                          <rect x="9" y="9" width="5" height="5" rx="1" />
+                        </>
+                      ) : (
+                        <>
+                          <path d="M2 4h12M2 8h12M2 12h12" />
+                        </>
+                      )}
+                    </svg>
+                  </button>
+                )
+              })}
+            </div>
+          )}
           {/* 정렬: 네이티브 select를 알약 모양으로 — 모바일에서는 OS 선택창이 열려 누르기 편하다. */}
           <label className="scf-sort">
             <select
@@ -797,7 +871,7 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
         <p style={{ ...textStyle('14/body/reg'), color: color.text.secondary, margin: 0 }}>선택한 조건에 맞는 스타 댓글이 없어요.</p>
       )}
 
-      <div className="scf-grid">
+      <div className={asList ? 'scf-list' : 'scf-grid'}>
         {visible.map((c) => (
           <div key={c.commentId} style={{ position: 'relative', minWidth: 0, display: 'flex' }}>
           {curate && (
@@ -833,15 +907,29 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
               height: '100%',
               boxSizing: 'border-box',
               textAlign: 'left',
-              border: `1px solid ${pinnedIds.has(c.commentId) ? color.surface['form-inverted'] : color.border['default-a']}`,
-              borderRadius: 16,
-              padding: 16,
-              cursor: 'pointer',
-              background: color.surface.card,
-              // 고정한 댓글은 테두리를 한 겹 더 두껍게(레이아웃은 그대로) 보여 준다.
-              boxShadow: pinnedIds.has(c.commentId)
-                ? `inset 0 0 0 1px ${color.surface['form-inverted']}, ${shadow['default-small']}`
-                : shadow['default-small'],
+              ...(asList
+                ? {
+                    // 리스트: 카드 테두리 없이 줄 사이 구분선만. 고정한 댓글은 왼쪽에 진한 줄을 한 겹 더 둔다.
+                    border: 'none',
+                    borderBottom: `1px solid ${color.border['default-a']}`,
+                    borderRadius: 0,
+                    padding: '16px 4px',
+                    cursor: 'pointer',
+                    background: 'transparent',
+                    boxShadow: pinnedIds.has(c.commentId) ? `inset 3px 0 0 ${color.surface['form-inverted']}` : 'none',
+                    paddingLeft: pinnedIds.has(c.commentId) ? 14 : 4,
+                  }
+                : {
+                    border: `1px solid ${pinnedIds.has(c.commentId) ? color.surface['form-inverted'] : color.border['default-a']}`,
+                    borderRadius: 16,
+                    padding: 16,
+                    cursor: 'pointer',
+                    background: color.surface.card,
+                    // 고정한 댓글은 테두리를 한 겹 더 두껍게(레이아웃은 그대로) 보여 준다.
+                    boxShadow: pinnedIds.has(c.commentId)
+                      ? `inset 0 0 0 1px ${color.surface['form-inverted']}, ${shadow['default-small']}`
+                      : shadow['default-small'],
+                  }),
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -879,12 +967,12 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
               style={{
                 ...textStyle('15/body/reg'),
                 color: color.text.primary,
-                margin: '0 0 12px',
+                margin: asList ? '0 0 8px' : '0 0 12px',
                 flex: 1,
                 overflowWrap: 'anywhere',
                 whiteSpace: 'pre-wrap',
                 display: '-webkit-box',
-                WebkitLineClamp: 3,
+                WebkitLineClamp: asList ? 2 : 3,
                 WebkitBoxOrient: 'vertical',
                 overflow: 'hidden',
               }}
@@ -896,9 +984,10 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                padding: '8px 10px',
+                // 리스트에서는 원글 줄을 상자 없이 가볍게 보여 준다.
+                padding: asList ? 0 : '8px 10px',
                 borderRadius: 10,
-                background: color.bg['grouped-weak'],
+                background: asList ? 'transparent' : color.bg['grouped-weak'],
               }}
             >
               <span
