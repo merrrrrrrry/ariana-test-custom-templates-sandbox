@@ -589,12 +589,17 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
     [comments, cfg.hiddenStars, cfg.hiddenKeywords, cfg.hiddenCommentIds, cfg.pinnedCommentIds, cfg.minReactions, cfg.perPostLimit, cfg.perPostOrder]
   )
 
-  // 칩: 댓글을 쓴 스타 + 스타 목록 API의 모든 스타(아직 댓글이 없어도 고를 수 있다).
+  // 칩: 댓글을 쓴 스타 + 스타 목록 API의 모든 스타(아직 댓글이 없어도 고를 수 있다)
+  //     + 운영자가 "스타 순서"에 적은 닉네임(스타 목록 API가 실패해도 칩이 남도록, 댓글이 없으면 고르면 빈 목록이 나온다).
   // 운영자가 정한 순서(닉네임)가 앞에 오고, 숨긴 스타는 뺀다.
   const stars = useMemo(() => {
     const map = new Map<string, StarRef>()
     for (const s of knownStars) map.set(s.id, s)
     for (const c of comments ?? []) map.set(c.star.id, c.star)
+    const known = new Set(Array.from(map.values(), (s) => s.nickname))
+    for (const nickname of cfg.starOrder) {
+      if (!known.has(nickname)) map.set(`name:${nickname}`, { id: `name:${nickname}`, nickname })
+    }
     const hidden = new Set(cfg.hiddenStars)
     const rank = (nickname: string) => {
       const index = cfg.starOrder.indexOf(nickname)
