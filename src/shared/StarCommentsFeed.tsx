@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigation } from '@bstage-sdk/react'
 import { color, shadow, textStyle } from '@bstage-sdk/design/user'
 import { client } from './client'
+import { getApiHealth, trackApi } from './apiHealth'
 import { curateComments, pinOrder } from './curateComments'
 import { isLoggedIn } from './isLoggedIn'
 import { loadStarCommentsConfig } from './loadStarCommentsConfig'
@@ -264,7 +265,7 @@ interface BoardPostsResponse {
 // 그래서 댓글이 있는 최신 글의 최상위 댓글 목록에서 작성자 type이 STAR인 것을 고른다.
 // excludedBoards: 운영자가 제외한 게시판 제목.
 async function loadCommunityStarComments(excludedBoards: string[]): Promise<StarComment[]> {
-  const allBoards = (await client.get<BoardSummary[]>('/content/v1/boards')).data ?? []
+  const allBoards = (await trackApi('게시판 목록', client.get<BoardSummary[]>('/content/v1/boards'))).data ?? []
   const boards = allBoards.filter((board) => !excludedBoards.includes((board.title ?? '').trim()))
   const postsByBoard = await Promise.all(
     boards.map((board) =>
@@ -321,8 +322,7 @@ function detailPath(c: StarComment): string {
 
 // 칩에 보여 줄 "모든 스타": 스타 목록 API(댓글을 쓴 스타는 화면에서 합친다).
 async function loadAllStars(): Promise<StarRef[]> {
-  return client
-    .get<StarRef[]>('/home/v1/star-home/stars')
+  return trackApi('스타 목록', client.get<StarRef[]>('/home/v1/star-home/stars'))
     .then((res) => (Array.isArray(res.data) ? res.data : []))
     .catch(() => [] as StarRef[])
 }
@@ -370,25 +370,28 @@ async function loadStoryAndContentsStarComments(sources: StarCommentsConfig['sou
   const taggedItems = tags ? await loadTaggedItems(tags, sources) : null
   const [feeds, curation, shows, homeSections] = taggedItems ? [[], [], [], []] as ContentItem[][] : await Promise.all([
     sources.story
-      ? (handle
-          ? client.get<FeedsResponse>('/home/v1/star-home/lounges/{loungeHandle}/feeds', {
-              path: { loungeHandle: handle },
-              params: { page: 1, pageSize: PAGE_SIZE },
-            })
-          : client.get<FeedsResponse>('/home/v1/star-home/feeds', { params: { page: 1, pageSize: PAGE_SIZE } })
+      ? trackApi(
+          '스타 스토리 피드',
+          handle
+            ? client.get<FeedsResponse>('/home/v1/star-home/lounges/{loungeHandle}/feeds', {
+                path: { loungeHandle: handle },
+                params: { page: 1, pageSize: PAGE_SIZE },
+              })
+            : client.get<FeedsResponse>('/home/v1/star-home/feeds', { params: { page: 1, pageSize: PAGE_SIZE } })
         )
           .then((res) => res.data?.items ?? [])
           .catch(() => [] as ContentItem[])
       : none,
     sources.contents
-      ? client
-          .get<CurationResponse>('/home/v1/content-home/sections/curation', { params: { page: 1, pageSize: PAGE_SIZE } })
+      ? trackApi(
+          '큐레이션 섹션',
+          client.get<CurationResponse>('/home/v1/content-home/sections/curation', { params: { page: 1, pageSize: PAGE_SIZE } })
+        )
           .then((res) => res.data?.contents?.items ?? [])
           .catch(() => [] as ContentItem[])
       : none,
     sources.contents
-      ? client
-          .get<ShowsResponse>('/home/v1/content-home/shows')
+      ? trackApi('쇼', client.get<ShowsResponse>('/home/v1/content-home/shows'))
           .then((res) => res.data?.shows ?? [])
           .catch(() => [] as ContentItem[])
       : none,
@@ -457,6 +460,43 @@ async function loadStoryAndContentsStarComments(sources: StarCommentsConfig['sou
     })
   )
   return comments
+}
+
+// 운영자용(?curate=1): 이 화면이 쓰는 API의 마지막 응답. 실패해도 팬 화면은 빈 목록으로 넘어가서 눈에 안 띄므로 따로 보여 준다.
+function ApiHealthLine() {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const entries = getApiHealth()
+  return (
+    <div
+      role="status"
+      style={{
+        ...textStyle('12/caption/regular'),
+        color: color.text.secondary,
+        border: `1px dashed ${color.border['default-a']}`,
+        borderRadius: 8,
+        padding: '8px 12px',
+        marginBottom: 12,
+      }}
+    >
+      <strong style={{ color: color.text.primary }}>연결 점검(운영자용)</strong>
+      {entries.length === 0 ? (
+        ' · 아직 호출 기록이 없어요'
+      ) : (
+        <span>
+          {entries.map((e) => (
+            <span key={e.name} style={{ marginLeft: 10, color: e.ok ? color.text.secondary : color.text.red, whiteSpace: 'nowrap' }}>
+              {e.ok ? '✓' : '✕'} {e.name}
+              {e.ok ? '' : ` (${e.status === null ? '오류' : `HTTP ${e.status}`})`}
+            </span>
+          ))}
+        </span>
+      )}
+    </div>
+  )
 }
 
 export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFeedProps = {}) {
@@ -737,6 +777,8 @@ export default function StarCommentsFeed({ placement = 'page' }: StarCommentsFee
       )}
       {enabled && (
         <>
+
+      {curate && <ApiHealthLine />}
 
       {/* 필터: 스타 선택(복수) · 출처 선택(복수) + 정렬 */}
       {stars.length > 0 && (
