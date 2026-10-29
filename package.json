@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite dev",
+    "test": "node tests/run.mjs",
     "build": "bstage build",
     "typecheck": "tsc -b",
     "lint": "eslint .",
