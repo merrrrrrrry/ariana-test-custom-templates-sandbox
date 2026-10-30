@@ -1,5 +1,5 @@
 import { client } from './client'
-import { CACHE_BUCKET_MS, LOCAL_PAGE_STORAGE_PREFIX, parseSchedulePage, scheduleKey, type SchedulePage } from './starScheduleConfig'
+import { CACHE_BUCKET_MS, LOCAL_PAGE_STORAGE_PREFIX, isTombstone, parseSchedulePage, scheduleKey, type SchedulePage } from './starScheduleConfig'
 
 export type LoadResult = { state: 'ok'; page: SchedulePage } | { state: 'notfound' } | { state: 'error' }
 
@@ -16,6 +16,7 @@ export async function loadSchedulePage(slug: string): Promise<LoadResult> {
     try {
       const local = window.localStorage.getItem(LOCAL_PAGE_STORAGE_PREFIX + slug)
       if (local) {
+        if (isTombstone(local)) return { state: 'notfound' }
         const page = parseSchedulePage(local)
         return page ? { state: 'ok', page } : { state: 'error' }
       }
@@ -30,6 +31,7 @@ export async function loadSchedulePage(slug: string): Promise<LoadResult> {
       if (isNotFound(err)) throw err
       return read()
     })
+    if (isTombstone(res.data)) return { state: 'notfound' }
     const page: SchedulePage | null = parseSchedulePage(res.data)
     return page ? { state: 'ok', page } : { state: 'error' }
   } catch (err) {

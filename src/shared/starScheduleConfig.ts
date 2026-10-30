@@ -214,6 +214,15 @@ export function parseIndex(raw: unknown): ScheduleIndex {
   return { version: 1, pages }
 }
 
+/** 저장소가 레코드 삭제를 지원하지 않을 때 덮어쓰는 "삭제 표시". 팬 화면은 이 레코드를 없는 페이지로 본다 */
+export function makeTombstone(slug: string): { version: 1; slug: string; deleted: true } {
+  return { version: 1, slug, deleted: true }
+}
+
+export function isTombstone(raw: unknown): boolean {
+  return asObject(unwrapData(raw)).deleted === true
+}
+
 export function indexEntryOf(page: SchedulePage): ScheduleIndexEntry {
   return {
     slug: page.slug,

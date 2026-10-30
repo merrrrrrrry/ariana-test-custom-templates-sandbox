@@ -11,8 +11,10 @@ import {
   fromKst,
   googleCalendarUrl,
   icsFileName,
+  isTombstone,
   isValidSlug,
   layoutMonth,
+  makeTombstone,
   monthTitle,
   monthWeeks,
   pageUrl,
@@ -103,6 +105,13 @@ t('parseIndex', () => {
   const i = parseIndex({ pages: [{ slug: 'a', name: 'A', star: 's', visibility: 'login', eventCount: 3 }, { slug: 'a' }, { slug: 'Bad' }, 5] })
   assert.equal(i.pages.length, 1); assert.equal(i.pages[0].visibility, 'login'); assert.equal(i.pages[0].eventCount, 3)
   assert.deepEqual(parseIndex(null).pages, [])
+})
+
+t('삭제 표시(tombstone)', () => {
+  const tomb = makeTombstone('luna')
+  assert.equal(isTombstone(tomb), true); assert.equal(isTombstone({ data: tomb }), true); assert.equal(isTombstone(JSON.stringify(tomb)), true)
+  assert.equal(isTombstone({ slug: 'luna', name: 'x' }), false); assert.equal(isTombstone(null), false)
+  assert.equal(parseSchedulePage(tomb)?.events.length, 0, '삭제 표시도 빈 페이지로는 읽힌다 — 판정은 호출부가 isTombstone으로 한다')
 })
 
 t('assertSafeKeys: 점·$ 키 거부', () => {
