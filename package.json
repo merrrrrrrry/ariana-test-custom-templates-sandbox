@@ -15,10 +15,10 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@bstage-sdk/cli": "0.2.0",
-    "@bstage-sdk/core": "0.2.0",
-    "@bstage-sdk/design": "0.2.0",
-    "@bstage-sdk/react": "0.2.0",
+    "@bstage-sdk/cli": "0.15.1",
+    "@bstage-sdk/core": "0.15.1",
+    "@bstage-sdk/design": "0.15.1",
+    "@bstage-sdk/react": "0.15.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
