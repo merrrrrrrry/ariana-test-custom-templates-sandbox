@@ -474,7 +474,7 @@ function ApiHealthLine() {
     <div
       role="status"
       style={{
-        ...textStyle('12/caption/regular'),
+        ...textStyle('12/caption/reg'),
         color: color.text.secondary,
         border: `1px dashed ${color.border['default-a']}`,
         borderRadius: 8,
