@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict'
 import {
+  GUEST_ID_KEY,
   HEARTBEAT_MS,
   ViewersHttpError,
   createViewersApi,
+  getOrCreateGuestId,
   isValidPage,
+  newGuestId,
   nextDelay,
   normalizeServerUrl,
   parseStats,
   type FetchLike,
+  type StorageLike,
 } from '../src/shared/viewers/viewersApi.ts'
 
 // 서버 주소 정리: https만, 끝 슬래시 제거, 나머지는 미설정('')
@@ -35,6 +39,36 @@ assert.equal(nextDelay(0), HEARTBEAT_MS)
 assert.equal(nextDelay(1), 30_000)
 assert.equal(nextDelay(2), 60_000)
 assert.equal(nextDelay(9), 60_000)
+
+// 비로그인 방문자 id: 처음엔 만들어 저장하고, 다음부터는 같은 값을 쓴다
+const memory = new Map<string, string>()
+const store: StorageLike = {
+  getItem: (k) => memory.get(k) ?? null,
+  setItem: (k, v) => void memory.set(k, v),
+}
+const first = getOrCreateGuestId(store)
+assert.match(first ?? '', /^guest-[0-9a-f]{32}$/)
+assert.equal(memory.get(GUEST_ID_KEY), first, '만든 id가 저장된다')
+assert.equal(getOrCreateGuestId(store), first, '다시 열어도 같은 사람')
+assert.notEqual(newGuestId(), newGuestId(), '난수라서 매번 다르다')
+// 저장된 값이 이상하면(손으로 바꾼 값 등) 새로 만든다
+memory.set(GUEST_ID_KEY, 'not-a-guest-id')
+const replaced = getOrCreateGuestId(store)
+assert.match(replaced ?? '', /^guest-[0-9a-f]{32}$/)
+assert.notEqual(replaced, 'not-a-guest-id')
+// 저장소를 못 쓰면 집계하지 않는다(null): 접근 불가 / setItem이 던짐 / 조용히 버림
+assert.equal(getOrCreateGuestId(null), null)
+const throwing: StorageLike = {
+  getItem: () => null,
+  setItem: () => {
+    throw new Error('QuotaExceededError')
+  },
+}
+assert.equal(getOrCreateGuestId(throwing), null)
+const forgetful: StorageLike = { getItem: () => null, setItem: () => undefined }
+assert.equal(getOrCreateGuestId(forgetful), null)
+// 방문자 id도 서버가 받는 길이(200자) 안이다
+assert.ok(newGuestId().length <= 200)
 
 // 요청 모양: 주소·헤더·본문
 const calls: { url: string; init?: RequestInit }[] = []

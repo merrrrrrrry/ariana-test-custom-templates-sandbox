@@ -18,6 +18,51 @@ export interface ViewerStats {
   totalViewers: number
 }
 
+/** 로그인 안 한 방문자의 id를 브라우저에 저장해 두는 키 */
+export const GUEST_ID_KEY = 'bmf-viewers-guest-id'
+
+/** `localStorage`에서 쓰는 두 함수만 뽑은 모양(테스트에서 가짜로 갈아 끼우려고) */
+export interface StorageLike {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+const GUEST_ID_PATTERN = /^guest-[0-9a-f]{32}$/
+
+/** 임의의 방문자 id: `guest-` + 16바이트 난수(hex). 회원 id와 섞이지 않도록 접두사를 붙인다. */
+export function newGuestId(): string {
+  const bytes = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(bytes)
+  return `guest-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`
+}
+
+/**
+ * 비로그인 방문자 id를 꺼낸다. 없거나 모양이 이상하면 새로 만들어 저장한다.
+ * 저장소를 못 쓰면(차단·시크릿 모드 등) null — 새로고침마다 다른 사람으로 세어 "다녀간 사람" 수가 부풀지 않도록 집계하지 않는다.
+ */
+export function getOrCreateGuestId(storage: StorageLike | null, make: () => string = newGuestId): string | null {
+  if (!storage) return null
+  try {
+    const saved = storage.getItem(GUEST_ID_KEY)
+    if (saved && GUEST_ID_PATTERN.test(saved)) return saved
+    const created = make()
+    storage.setItem(GUEST_ID_KEY, created)
+    // 저장이 실제로 됐는지 다시 읽어 확인한다(조용히 버리는 저장소 대비).
+    return storage.getItem(GUEST_ID_KEY) === created ? created : null
+  } catch {
+    return null
+  }
+}
+
+/** 브라우저의 localStorage. 접근 자체가 막혀 있으면 null. */
+export function browserStorage(): StorageLike | null {
+  try {
+    return globalThis.localStorage ?? null
+  } catch {
+    return null
+  }
+}
+
 /** `__bstage_fetch__`(격리 상자의 브리지 fetch)와 같은 모양 */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -58,6 +103,7 @@ export function resolveFetch(): FetchLike {
 }
 
 export interface ViewersApi {
+  /** `memberId`: 로그인한 팬의 id 또는 비로그인 방문자 id(`guest-…`). 서버가 해시해서 저장한다. */
   heartbeat(page: string, memberId: string): Promise<ViewerStats>
   leave(page: string, memberId: string): Promise<ViewerStats>
   read(page: string): Promise<ViewerStats>
