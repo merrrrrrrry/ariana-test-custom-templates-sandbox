@@ -96,6 +96,13 @@ export interface ViewersBadgeProps {
   margin?: string
 }
 
+// 배너의 초록 점 애니메이션. 클래스 이름에 접두사를 붙여 같은 화면의 다른 위젯 스타일과 겹치지 않게 한다.
+const BANNER_CSS = `
+@keyframes bmf-viewers-ping { 0% { transform: scale(1); opacity: .55 } 80%, 100% { transform: scale(2.6); opacity: 0 } }
+.bmf-viewers-ring { animation: bmf-viewers-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite }
+@media (prefers-reduced-motion: reduce) { .bmf-viewers-ring { animation: none; opacity: 0 } }
+`
+
 function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: ViewersBadgeProps) {
   const { stats, status } = useViewers(page)
 
@@ -114,32 +121,42 @@ function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: Vi
 
   if (variant === 'banner') {
     return (
+      // 글자 폭만큼만 차지하는 작은 캡슐(화면 폭을 꽉 채우지 않고 왼쪽 정렬). 너무 좁아 줄이 바뀌어도 모서리가 어색하지 않게 반지름은 16.
       <div
         style={{
           background,
-          borderRadius: 12,
-          padding: '8px 12px',
+          borderRadius: 16,
+          padding: '6px 14px 6px 12px',
           margin,
+          width: 'fit-content',
+          boxSizing: 'border-box',
           display: 'flex',
           alignItems: 'center',
           flexWrap: 'wrap',
           gap: '2px 8px',
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
-        <span
-          aria-hidden="true"
-          style={{ width: 6, height: 6, borderRadius: '50%', background: color.icon.green, flex: 'none' }}
-        />
+        <style>{BANNER_CSS}</style>
+        {/* 살아 있다는 느낌의 초록 점: 바깥 고리가 천천히 퍼진다(동작 줄이기 설정이면 멈춤) */}
+        <span aria-hidden="true" style={{ position: 'relative', width: 8, height: 8, flex: 'none' }}>
+          <span
+            className="bmf-viewers-ring"
+            style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: color.icon.green }}
+          />
+          <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: color.icon.green }} />
+        </span>
         <span style={{ ...textStyle('13/body/semibold'), color: color.text.primary }}>
           {stats ? `지금 ${watching}명이 보는 중` : status === 'loading' ? '불러오는 중…' : '—'}
         </span>
         {stats && (
           <>
-            <span aria-hidden="true" style={{ ...textStyle('12/caption/reg'), color: color.text.tertiary }}>
-              ·
-            </span>
+            <span
+              aria-hidden="true"
+              style={{ width: 1, height: 10, flex: 'none', background: color.text.tertiary, opacity: 0.35 }}
+            />
             <span style={{ ...textStyle('12/caption/reg'), color: color.text.tertiary }}>
-              지금까지 {total}명이 다녀갔어요
+              {total}명 다녀갔어요
             </span>
           </>
         )}
