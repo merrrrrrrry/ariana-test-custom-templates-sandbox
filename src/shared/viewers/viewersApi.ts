@@ -143,6 +143,15 @@ export function createViewersApi(opts: { serverUrl: string; spaceId: string; fet
   }
 }
 
+/**
+ * 사람이 적어 썰렁해 보일 때는 숫자를 보여 주지 않기 위한 규칙.
+ * `minWatching`이 0 이하면 항상 보여 주고, 아니면 지금 보는 사람이 `minWatching`명 이상일 때만 보여 준다.
+ * (보는 사람에는 나 자신도 들어가므로 3이면 나 말고 2명 이상일 때다.)
+ */
+export function isCrowdedEnough(watching: number, minWatching: number): boolean {
+  return minWatching <= 0 || watching >= minWatching
+}
+
 /** 연속 실패 횟수에 따른 다음 호출까지의 간격: 15초 → 30초 → 60초(상한). 서버가 안 뜰 때 계속 두드리지 않는다. */
 export function nextDelay(consecutiveFailures: number): number {
   if (consecutiveFailures <= 0) return HEARTBEAT_MS
