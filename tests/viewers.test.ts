@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import {
   GUEST_ID_KEY,
   HEARTBEAT_MS,
@@ -69,6 +70,12 @@ const forgetful: StorageLike = { getItem: () => null, setItem: () => undefined }
 assert.equal(getOrCreateGuestId(forgetful), null)
 // 방문자 id도 서버가 받는 길이(200자) 안이다
 assert.ok(newGuestId().length <= 200)
+
+// 회귀 방지: 배지는 로그인 확인 호출(/account/v1/users)을 하지 않는다. 로그인 안 한 방문자에게 401이 나면
+// 사이트가 "로그인 정보를 확인할 수 없어요" 팝업을 띄운다.
+const badgeSource = await readFile(new URL('../src/shared/viewers/ViewersBadge.tsx', import.meta.url), 'utf8')
+assert.equal(/account\/v1\/users/.test(badgeSource), false, '배지에서 /account/v1/users를 부르면 안 된다')
+assert.equal(/from ['"]\.\.\/client['"]/.test(badgeSource), false, '배지는 BstageClient(client)를 쓰지 않는다')
 
 // 요청 모양: 주소·헤더·본문
 const calls: { url: string; init?: RequestInit }[] = []
