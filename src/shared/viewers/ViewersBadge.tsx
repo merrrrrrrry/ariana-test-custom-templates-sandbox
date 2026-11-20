@@ -6,6 +6,7 @@ import {
   browserStorage,
   createViewersApi,
   getOrCreateGuestId,
+  isCrowdedEnough,
   nextDelay,
   normalizeServerUrl,
   resolveFetch,
@@ -80,6 +81,11 @@ export interface ViewersBadgeProps {
    */
   quiet?: boolean
   /**
+   * 지금 보는 사람이 이 수보다 적으면 배지를 아예 그리지 않는다(사람이 적어 썰렁해 보이는 걸 막으려고). 0이면 항상 보여 준다.
+   * 0보다 크게 두면 값을 아직 못 받았을 때도 그리지 않는다. 보는 사람에는 나 자신도 들어가므로 3이면 나 말고 2명 이상일 때 보인다.
+   */
+  minWatching?: number
+  /**
    * 바깥 여백(카드 모양에만 적용). 래퍼 div에 padding을 주면 안 그려질 때도 자리를 차지하므로 본체의 margin으로 받는다.
    * 배너 모양은 플랫폼 화면 여백(모바일 16px, 넓은 화면 32px)을 스스로 따라가므로 이 값을 쓰지 않는다.
    */
@@ -121,9 +127,12 @@ const BANNER_CSS = `
 @media (prefers-reduced-motion: reduce) { .bmf-viewers-ring { animation: none; opacity: 0 } }
 `
 
-function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: ViewersBadgeProps) {
+function ViewersBadgeInner({ page, variant = 'card', quiet = false, minWatching = 0, margin }: ViewersBadgeProps) {
   const { stats, status } = useViewers(page)
   const largeScreen = useLargeScreen()
+
+  // 썰렁한 곳(보는 사람이 minWatching명 미만)에서는 그리지 않는다. 숫자가 15초마다 바뀌므로 사람이 늘면 그때 나타난다.
+  if (minWatching > 0 && !(stats && isCrowdedEnough(stats.watching, minWatching))) return null
 
   if (quiet && !stats) return null
 

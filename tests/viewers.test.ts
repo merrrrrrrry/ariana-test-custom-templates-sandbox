@@ -6,6 +6,7 @@ import {
   ViewersHttpError,
   createViewersApi,
   getOrCreateGuestId,
+  isCrowdedEnough,
   isValidPage,
   newGuestId,
   nextDelay,
@@ -34,6 +35,15 @@ assert.deepEqual(parseStats({ page: '/p', watching: 2, totalViewers: 5 }), { pag
 assert.equal(parseStats({ page: '/p', watching: '2', totalViewers: 5 }), null)
 assert.equal(parseStats({ page: '/p', watching: -1, totalViewers: 5 }), null)
 assert.equal(parseStats(null), null)
+
+// 썰렁한 곳 숨기기: minWatching이 0 이하면 항상 보이고, 아니면 보는 사람이 그 수 이상일 때만 보인다
+assert.equal(isCrowdedEnough(0, 0), true, '0이면 규칙 없음: 아무도 없어도 보임')
+assert.equal(isCrowdedEnough(1, 0), true)
+assert.equal(isCrowdedEnough(1, 3), false, '나 혼자(1명)면 숨김')
+assert.equal(isCrowdedEnough(2, 3), false, '2명도 3명 미만이면 숨김')
+assert.equal(isCrowdedEnough(3, 3), true, '딱 3명이면 보임')
+assert.equal(isCrowdedEnough(12, 3), true)
+assert.equal(isCrowdedEnough(1, -1), true, '음수는 규칙 없음으로 본다')
 
 // 재시도 간격: 정상 15초, 실패하면 늘어나다 60초에서 멈춘다
 assert.equal(nextDelay(0), HEARTBEAT_MS)
