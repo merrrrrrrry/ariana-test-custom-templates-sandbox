@@ -15,6 +15,12 @@ import {
   type FetchLike,
   type StorageLike,
 } from '../src/shared/viewers/viewersApi.ts'
+import {
+  MIN_WATCHING_LIMIT,
+  VIEWERS_CONFIG_KEY,
+  parseViewersConfig,
+  unwrapStoredData,
+} from '../src/shared/viewers/viewersConfig.ts'
 
 // 서버 주소 정리: https만, 끝 슬래시 제거, 나머지는 미설정('')
 assert.equal(normalizeServerUrl('https://viewers.example.in'), 'https://viewers.example.in')
@@ -44,6 +50,28 @@ assert.equal(isCrowdedEnough(2, 3), false, '2명도 3명 미만이면 숨김')
 assert.equal(isCrowdedEnough(3, 3), true, '딱 3명이면 보임')
 assert.equal(isCrowdedEnough(12, 3), true)
 assert.equal(isCrowdedEnough(1, -1), true, '음수는 규칙 없음으로 본다')
+
+// 어드민 설정 읽기: 정상 값은 그대로, 이상한 값은 "설정 없음(null)"이라 팬 화면은 기본 동작을 한다
+assert.deepEqual(parseViewersConfig({ version: 1, minWatching: 3 }), { version: 1, minWatching: 3 })
+assert.deepEqual(parseViewersConfig('{"minWatching":5}'), { version: 1, minWatching: 5 }, 'JSON 문자열도 읽는다')
+assert.deepEqual(parseViewersConfig({ minWatching: 0 }), { version: 1, minWatching: 0 }, '0은 정상 값(항상 보임)')
+assert.deepEqual(parseViewersConfig({ minWatching: '4' }), { version: 1, minWatching: 4 }, '숫자 문자열은 숫자로')
+assert.deepEqual(parseViewersConfig({ minWatching: 2.9 }), { version: 1, minWatching: 2 }, '소수는 내림')
+assert.deepEqual(parseViewersConfig({ minWatching: -5 }), { version: 1, minWatching: 0 }, '음수는 0')
+assert.deepEqual(
+  parseViewersConfig({ minWatching: 100000 }),
+  { version: 1, minWatching: MIN_WATCHING_LIMIT },
+  '너무 큰 값은 상한으로(캡슐이 영영 안 보이는 실수 방지)',
+)
+assert.deepEqual(parseViewersConfig({ minWatching: 3, other: 'x' }), { version: 1, minWatching: 3 }, '모르는 필드는 버린다')
+assert.equal(parseViewersConfig({}), null)
+assert.equal(parseViewersConfig({ minWatching: 'abc' }), null)
+assert.equal(parseViewersConfig({ minWatching: '' }), null)
+assert.equal(parseViewersConfig(null), null)
+assert.equal(parseViewersConfig('not json'), null)
+assert.deepEqual(unwrapStoredData({ displayKey: 'ariana-viewers', data: { minWatching: 3 } }), { minWatching: 3 }, '저장소 응답의 data를 꺼낸다')
+assert.deepEqual(unwrapStoredData({ minWatching: 3 }), { minWatching: 3 }, 'data가 없으면 그대로')
+assert.ok(!VIEWERS_CONFIG_KEY.includes('.') && !VIEWERS_CONFIG_KEY.includes(':'), '저장소 키에는 점·콜론이 없어야 한다')
 
 // 재시도 간격: 정상 15초, 실패하면 늘어나다 60초에서 멈춘다
 assert.equal(nextDelay(0), HEARTBEAT_MS)
