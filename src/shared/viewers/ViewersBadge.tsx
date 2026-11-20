@@ -79,8 +79,36 @@ export interface ViewersBadgeProps {
    * 받은 뒤 일시적으로 실패해도 오류 문구 없이 마지막 값을 그대로 보여 준다. 운영 확인용 안내는 일반 모드에서만 보인다.
    */
   quiet?: boolean
-  /** 바깥 여백. 래퍼 div에 padding을 주면 안 그려질 때도 자리를 차지하므로 본체의 margin으로 받는다. */
+  /**
+   * 바깥 여백(카드 모양에만 적용). 래퍼 div에 padding을 주면 안 그려질 때도 자리를 차지하므로 본체의 margin으로 받는다.
+   * 배너 모양은 플랫폼 화면 여백(모바일 16px, 넓은 화면 32px)을 스스로 따라가므로 이 값을 쓰지 않는다.
+   */
   margin?: string
+}
+
+// 배너의 좌우 바깥 여백: 플랫폼이 섹션 제목·카드에 주는 좌우 여백(모바일 16px, 넓은 화면 32px)을 그대로 따라가서
+// 화면 폭이 바뀌어도 캡슐의 왼쪽 끝이 아래 섹션 제목과 맞는다. 넓은 화면 판단은 플랫폼이 body에 붙이는
+// data-screen-variant="LARGE"를 읽는다. 위젯은 shadow DOM 안에서 그려져 CSS 선택자로는 바깥 body를 볼 수 없어 직접 읽고 지켜본다.
+// 공식 SDK 문서에는 없는 값이라, 바뀌어 사라지거나 격리(iframe)로 돌면 모든 폭에서 16px로 보일 뿐 깨지지는 않는다.
+function readLargeScreen(): boolean {
+  try {
+    return document.body?.getAttribute('data-screen-variant') === 'LARGE'
+  } catch {
+    return false
+  }
+}
+
+function useLargeScreen(): boolean {
+  const [large, setLarge] = useState(readLargeScreen)
+  useEffect(() => {
+    if (typeof document === 'undefined' || !document.body || typeof MutationObserver === 'undefined') return
+    const update = () => setLarge(readLargeScreen())
+    update()
+    const observer = new MutationObserver(update)
+    observer.observe(document.body, { attributes: true, attributeFilter: ['data-screen-variant'] })
+    return () => observer.disconnect()
+  }, [])
+  return large
 }
 
 // 배너의 초록 점 애니메이션. 클래스 이름에 접두사를 붙여 같은 화면의 다른 위젯 스타일과 겹치지 않게 한다.
@@ -92,6 +120,7 @@ const BANNER_CSS = `
 
 function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: ViewersBadgeProps) {
   const { stats, status } = useViewers(page)
+  const largeScreen = useLargeScreen()
 
   if (quiet && !stats) return null
 
@@ -112,15 +141,15 @@ function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: Vi
       <div
         style={{
           background,
-          borderRadius: 16,
-          padding: '6px 14px 6px 12px',
-          margin,
+          borderRadius: 18,
+          padding: '8px 16px 8px 14px',
+          margin: `16px ${largeScreen ? 32 : 16}px 12px`,
           width: 'fit-content',
           boxSizing: 'border-box',
           display: 'flex',
           alignItems: 'center',
           flexWrap: 'wrap',
-          gap: '2px 8px',
+          gap: '2px 10px',
           fontVariantNumeric: 'tabular-nums',
         }}
       >
