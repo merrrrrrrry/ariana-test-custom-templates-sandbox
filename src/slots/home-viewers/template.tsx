@@ -11,11 +11,7 @@ import ViewersBadge from '../../shared/viewers/ViewersBadge'
 const PAGE_KEY = '/home'
 
 export default function HomeViewers() {
-  return (
-    <div style={{ padding: '16px 16px 32px', boxSizing: 'border-box' }}>
-      <ViewersBadge page={PAGE_KEY} />
-    </div>
-  )
+  return <ViewersBadge page={PAGE_KEY} quiet margin="16px 16px 32px" />
 }
 
 createTemplate(HomeViewers, {

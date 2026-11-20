@@ -81,19 +81,27 @@ function useViewers(page: string) {
   return { stats, status, loggedIn }
 }
 
-export default function ViewersBadge({ page }: { page: string }) {
+// quiet: 팬이 보는 화면(홈 등)용. 아직 값을 한 번도 못 받았으면 아무것도 그리지 않고(자리도 차지하지 않음),
+// 받은 뒤 일시적으로 실패해도 오류 문구 없이 마지막 값을 그대로 보여 준다. 운영 확인용 안내는 일반 모드에서만 보인다.
+// margin: 카드 바깥 여백. 래퍼 div에 padding을 주면 카드가 안 그려질 때도 자리를 차지하므로 카드 자체의 margin으로 받는다.
+export default function ViewersBadge({
+  page,
+  quiet = false,
+  margin,
+}: {
+  page: string
+  quiet?: boolean
+  margin?: string
+}) {
   const { stats, status, loggedIn } = useViewers(page)
 
-  const note =
-    status === 'unconfigured'
-      ? '뷰어 수 서버 주소가 아직 설정되지 않았어요.'
-      : status === 'error'
-        ? stats
-          ? '최신 값을 불러오지 못했어요. 다시 시도하는 중이에요.'
-          : '뷰어 수를 불러오지 못했어요.'
-        : status === 'ok' && loggedIn === false
-          ? '로그인하면 보는 사람으로 집계돼요.'
-          : null
+  if (quiet && !stats) return null
+
+  let note: string | null = null
+  if (status === 'unconfigured') note = '뷰어 수 서버 주소가 아직 설정되지 않았어요.'
+  else if (status === 'error') {
+    if (!quiet) note = stats ? '최신 값을 불러오지 못했어요. 다시 시도하는 중이에요.' : '뷰어 수를 불러오지 못했어요.'
+  } else if (status === 'ok' && loggedIn === false) note = '로그인하면 보는 사람으로 집계돼요.'
 
   return (
     <div
@@ -101,6 +109,7 @@ export default function ViewersBadge({ page }: { page: string }) {
         background: color.surface.card,
         borderRadius: 16,
         padding: 20,
+        margin,
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
