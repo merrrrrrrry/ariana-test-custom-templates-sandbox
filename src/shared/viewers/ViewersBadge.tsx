@@ -4,7 +4,9 @@ import { client } from '../client'
 import {
   VIEWERS_SERVER_URL,
   VIEWERS_SPACE_ID,
+  browserStorage,
   createViewersApi,
+  getOrCreateGuestId,
   nextDelay,
   normalizeServerUrl,
   resolveFetch,
@@ -12,13 +14,14 @@ import {
 } from './viewersApi'
 
 // "지금 N명이 보는 중". 어느 페이지에든 <ViewersBadge page="/경로" />로 붙인다.
-// - 로그인한 팬: 15초마다 하트비트(= 보는 사람으로 집계) + 현재 수를 받는다.
-// - 로그인 안 한 팬: 수만 읽고(집계되지 않음), 로그인 안내를 보여 준다(카드 모양일 때).
+// - 로그인한 팬: 회원 id로 15초마다 하트비트(= 보는 사람으로 집계) + 현재 수를 받는다.
+// - 로그인 안 한 방문자: 브라우저에 저장해 둔 임의의 방문자 id(guest-…)로 똑같이 집계한다.
+//   브라우저를 바꾸거나 시크릿 창으로 열면 다른 사람으로 센다. 저장소를 못 쓰면 집계하지 않고 수만 읽는다.
 // - 서버가 안 되거나 주소가 비어 있어도 화면은 깨지지 않는다(안내 문구만, quiet이면 아예 안 그림).
 
 type Status = 'unconfigured' | 'loading' | 'ok' | 'error'
 
-// 로그인한 팬의 id. 로그인 안 했거나 호출이 실패하면 null(= 집계하지 않음). 서버는 원문을 저장하지 않고 해시한다.
+// 로그인한 팬의 id. 로그인 안 했거나 호출이 실패하면 null(→ 방문자 id로 대신). 서버는 원문을 저장하지 않고 해시한다.
 async function loadMemberId(): Promise<string | null> {
   try {
     const res = await client.get<{ id?: string }>('/account/v1/users')
@@ -32,14 +35,14 @@ function useViewers(page: string) {
   const serverUrl = normalizeServerUrl(VIEWERS_SERVER_URL)
   const [stats, setStats] = useState<ViewerStats | null>(null)
   const [status, setStatus] = useState<Status>(serverUrl ? 'loading' : 'unconfigured')
-  const [loggedIn, setLoggedIn] = useState<boolean | null>(null)
 
   useEffect(() => {
     if (!serverUrl) return
     const api = createViewersApi({ serverUrl, spaceId: VIEWERS_SPACE_ID, fetchFn: resolveFetch() })
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    let memberId: string | null = null
+    // 집계에 쓰는 id: 로그인한 팬이면 회원 id, 아니면 방문자 id. 둘 다 없으면 null(수만 읽는다).
+    let viewerId: string | null = null
     let failures = 0
 
     // 요청은 한 번에 하나씩만 보낸다(RATE_LIMITED 방지). 탭이 숨겨져 있으면 이번 신호는 건너뛴다.
@@ -50,7 +53,7 @@ function useViewers(page: string) {
         return
       }
       try {
-        const next = memberId ? await api.heartbeat(page, memberId) : await api.read(page)
+        const next = viewerId ? await api.heartbeat(page, viewerId) : await api.read(page)
         if (cancelled) return
         failures = 0
         setStats(next)
@@ -65,8 +68,7 @@ function useViewers(page: string) {
 
     void loadMemberId().then((id) => {
       if (cancelled) return
-      memberId = id
-      setLoggedIn(id !== null)
+      viewerId = id ?? getOrCreateGuestId(browserStorage())
       void tick()
     })
 
@@ -74,11 +76,11 @@ function useViewers(page: string) {
       cancelled = true
       if (timer) clearTimeout(timer)
       // 페이지를 떠나면 바로 '보는 중'에서 뺀다(실패해도 45초 뒤에는 자동으로 빠진다).
-      if (memberId) void api.leave(page, memberId).catch(() => undefined)
+      if (viewerId) void api.leave(page, viewerId).catch(() => undefined)
     }
   }, [page, serverUrl])
 
-  return { stats, status, loggedIn }
+  return { stats, status }
 }
 
 export interface ViewersBadgeProps {
@@ -95,7 +97,7 @@ export interface ViewersBadgeProps {
 }
 
 function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: ViewersBadgeProps) {
-  const { stats, status, loggedIn } = useViewers(page)
+  const { stats, status } = useViewers(page)
 
   if (quiet && !stats) return null
 
@@ -103,7 +105,7 @@ function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: Vi
   if (status === 'unconfigured') note = '뷰어 수 서버 주소가 아직 설정되지 않았어요.'
   else if (status === 'error') {
     if (!quiet) note = stats ? '최신 값을 불러오지 못했어요. 다시 시도하는 중이에요.' : '뷰어 수를 불러오지 못했어요.'
-  } else if (status === 'ok' && loggedIn === false && variant === 'card') note = '로그인하면 보는 사람으로 집계돼요.'
+  }
 
   // 배경은 테마를 따라 바뀌는 반투명 틴트(라이트: 검정 6%, 다크: 흰색 6%). surface/card는 라이트에서 흰색이라 흰 화면에서 안 보인다.
   const background = color.bg['grouped-weak-a']
