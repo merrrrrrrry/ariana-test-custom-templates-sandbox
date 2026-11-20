@@ -103,7 +103,7 @@ export function resolveFetch(): FetchLike {
 }
 
 export interface ViewersApi {
-  /** `memberId`: 로그인한 팬의 id 또는 비로그인 방문자 id(`guest-…`). 서버가 해시해서 저장한다. */
+  /** `memberId`: 브라우저 방문자 id(`guest-…`)(서버는 아무 문자열이나 받는다). 서버가 해시해서 저장한다. */
   heartbeat(page: string, memberId: string): Promise<ViewerStats>
   leave(page: string, memberId: string): Promise<ViewerStats>
   read(page: string): Promise<ViewerStats>

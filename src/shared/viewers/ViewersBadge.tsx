@@ -1,6 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { color, textStyle } from '@bstage-sdk/design/user'
-import { client } from '../client'
 import {
   VIEWERS_SERVER_URL,
   VIEWERS_SPACE_ID,
@@ -14,22 +13,13 @@ import {
 } from './viewersApi'
 
 // "지금 N명이 보는 중". 어느 페이지에든 <ViewersBadge page="/경로" />로 붙인다.
-// - 로그인한 팬: 회원 id로 15초마다 하트비트(= 보는 사람으로 집계) + 현재 수를 받는다.
-// - 로그인 안 한 방문자: 브라우저에 저장해 둔 임의의 방문자 id(guest-…)로 똑같이 집계한다.
+// - 로그인 여부와 상관없이, 브라우저에 저장해 둔 임의의 방문자 id(guest-…)로 15초마다 하트비트(= 보는 사람으로 집계)하고 현재 수를 받는다.
 //   브라우저를 바꾸거나 시크릿 창으로 열면 다른 사람으로 센다. 저장소를 못 쓰면 집계하지 않고 수만 읽는다.
+// - 일부러 로그인 확인용 계정 API 호출을 하지 않는다: 로그인 안 한 방문자에게는 401이 나고,
+//   사이트가 그 401을 보고 "로그인 정보를 확인할 수 없어요" 팝업을 띄운다(실제로 겪음).
 // - 서버가 안 되거나 주소가 비어 있어도 화면은 깨지지 않는다(안내 문구만, quiet이면 아예 안 그림).
 
 type Status = 'unconfigured' | 'loading' | 'ok' | 'error'
-
-// 로그인한 팬의 id. 로그인 안 했거나 호출이 실패하면 null(→ 방문자 id로 대신). 서버는 원문을 저장하지 않고 해시한다.
-async function loadMemberId(): Promise<string | null> {
-  try {
-    const res = await client.get<{ id?: string }>('/account/v1/users')
-    return res.data?.id ?? null
-  } catch {
-    return null
-  }
-}
 
 function useViewers(page: string) {
   const serverUrl = normalizeServerUrl(VIEWERS_SERVER_URL)
@@ -41,7 +31,7 @@ function useViewers(page: string) {
     const api = createViewersApi({ serverUrl, spaceId: VIEWERS_SPACE_ID, fetchFn: resolveFetch() })
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    // 집계에 쓰는 id: 로그인한 팬이면 회원 id, 아니면 방문자 id. 둘 다 없으면 null(수만 읽는다).
+    // 집계에 쓰는 id(브라우저 방문자 id). 저장소를 못 쓰면 null(수만 읽는다).
     let viewerId: string | null = null
     let failures = 0
 
@@ -66,11 +56,8 @@ function useViewers(page: string) {
       if (!cancelled) timer = setTimeout(tick, nextDelay(failures))
     }
 
-    void loadMemberId().then((id) => {
-      if (cancelled) return
-      viewerId = id ?? getOrCreateGuestId(browserStorage())
-      void tick()
-    })
+    viewerId = getOrCreateGuestId(browserStorage())
+    void tick()
 
     return () => {
       cancelled = true
