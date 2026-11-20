@@ -86,10 +86,13 @@ export interface ViewersBadgeProps {
   margin?: string
 }
 
-// 배너의 좌우 바깥 여백: 플랫폼이 섹션 제목·카드에 주는 좌우 여백(모바일 16px, 넓은 화면 32px)을 그대로 따라가서
-// 화면 폭이 바뀌어도 캡슐의 왼쪽 끝이 아래 섹션 제목과 맞는다. 넓은 화면 판단은 플랫폼이 body에 붙이는
+// 배너 위치: 플랫폼은 콘텐츠를 가운데 정렬한 칸(최대 폭 1080px)에 두고 그 안쪽 좌우 여백을 모바일 16px, 넓은 화면 32px로 준다.
+// 배너도 같은 칸 모양으로 그려서 화면 폭이 바뀌어도(창이 넓어져 칸이 가운데로 밀려도) 캡슐의 왼쪽 끝이 아래 섹션 제목과 맞는다.
+// 이 값들은 플랫폼 화면에서 잰 값이다. 넓은 화면 판단은 플랫폼이 body에 붙이는
 // data-screen-variant="LARGE"를 읽는다. 위젯은 shadow DOM 안에서 그려져 CSS 선택자로는 바깥 body를 볼 수 없어 직접 읽고 지켜본다.
 // 공식 SDK 문서에는 없는 값이라, 바뀌어 사라지거나 격리(iframe)로 돌면 모든 폭에서 16px로 보일 뿐 깨지지는 않는다.
+const PAGE_CONTENT_MAX_WIDTH = 1080
+
 function readLargeScreen(): boolean {
   try {
     return document.body?.getAttribute('data-screen-variant') === 'LARGE'
@@ -137,46 +140,57 @@ function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: Vi
 
   if (variant === 'banner') {
     return (
-      // 글자 폭만큼만 차지하는 작은 캡슐(화면 폭을 꽉 채우지 않고 왼쪽 정렬). 너무 좁아 줄이 바뀌어도 모서리가 어색하지 않게 반지름은 16.
+      // 바깥 칸: 플랫폼 콘텐츠 칸과 같은 모양(가운데 정렬, 최대 폭 1080px, 좌우 여백 16/32px)이라 어떤 화면 폭에서도
+      // 캡슐의 왼쪽 끝이 아래 섹션 제목과 같은 선에 선다.
       <div
         style={{
-          background,
-          borderRadius: 18,
-          padding: '8px 16px 8px 14px',
-          margin: `16px ${largeScreen ? 32 : 16}px 12px`,
-          width: 'fit-content',
+          maxWidth: PAGE_CONTENT_MAX_WIDTH,
+          margin: '0 auto',
           boxSizing: 'border-box',
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '2px 10px',
-          fontVariantNumeric: 'tabular-nums',
+          padding: `16px ${largeScreen ? 32 : 16}px 12px`,
         }}
       >
-        <style>{BANNER_CSS}</style>
-        {/* 살아 있다는 느낌의 초록 점: 바깥 고리가 천천히 퍼진다(동작 줄이기 설정이면 멈춤) */}
-        <span aria-hidden="true" style={{ position: 'relative', width: 8, height: 8, flex: 'none' }}>
-          <span
-            className="bmf-viewers-ring"
-            style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: color.icon.green }}
-          />
-          <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: color.icon.green }} />
-        </span>
-        <span style={{ ...textStyle('13/body/semibold'), color: color.text.primary }}>
-          {stats ? `지금 ${watching}명이 보는 중` : status === 'loading' ? '불러오는 중…' : '—'}
-        </span>
-        {stats && (
-          <>
+        {/* 안쪽 캡슐: 글자 폭만큼만 차지하는 작은 모양(왼쪽 정렬). 너무 좁아 줄이 바뀌어도 모서리가 어색하지 않게 반지름은 18. */}
+        <div
+          style={{
+            background,
+            borderRadius: 18,
+            padding: '8px 16px 8px 14px',
+            width: 'fit-content',
+            maxWidth: '100%',
+            boxSizing: 'border-box',
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '2px 10px',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          <style>{BANNER_CSS}</style>
+          {/* 살아 있다는 느낌의 초록 점: 바깥 고리가 천천히 퍼진다(동작 줄이기 설정이면 멈춤) */}
+          <span aria-hidden="true" style={{ position: 'relative', width: 8, height: 8, flex: 'none' }}>
             <span
-              aria-hidden="true"
-              style={{ width: 1, height: 10, flex: 'none', background: color.text.tertiary, opacity: 0.35 }}
+              className="bmf-viewers-ring"
+              style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: color.icon.green }}
             />
-            <span style={{ ...textStyle('12/caption/reg'), color: color.text.tertiary }}>
-              {total}명 다녀갔어요
-            </span>
-          </>
-        )}
-        {note && <span style={{ ...textStyle('12/caption/reg'), color: color.text.tertiary }}>{note}</span>}
+            <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: color.icon.green }} />
+          </span>
+          <span style={{ ...textStyle('13/body/semibold'), color: color.text.primary }}>
+            {stats ? `지금 ${watching}명이 보는 중` : status === 'loading' ? '불러오는 중…' : '—'}
+          </span>
+          {stats && (
+            <>
+              <span
+                aria-hidden="true"
+                style={{ width: 1, height: 10, flex: 'none', background: color.text.tertiary, opacity: 0.35 }}
+              />
+              <span style={{ ...textStyle('12/caption/reg'), color: color.text.tertiary }}>
+                {total}명 다녀갔어요
+              </span>
+            </>
+          )}
+          {note && <span style={{ ...textStyle('12/caption/reg'), color: color.text.tertiary }}>{note}</span>}
+        </div>
       </div>
     )
   }
