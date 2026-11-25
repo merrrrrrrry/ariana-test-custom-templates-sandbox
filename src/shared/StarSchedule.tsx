@@ -444,13 +444,14 @@ function EventModal({
 
 // ── 본문 ────────────────────────────────────────────────────────────────
 
-function ScheduleBody() {
+// fixedPage를 주면 저장소를 읽지 않고 그 일정 페이지를 그대로 보여준다(예시 화면용). 바꿀 때는 key를 바꿔 다시 그린다.
+function ScheduleBody({ fixedPage }: { fixedPage?: SchedulePage }) {
   const { current } = useLocale()
   const locale = uiLocale(current)
   const t: T = useMessages(MESSAGES)
 
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
-  const slug = params.get('p')
+  const slug = fixedPage ? fixedPage.slug : params.get('p')
   const today = useMemo(() => toKst(new Date().toISOString()), [])
 
   const [ym, setYm] = useState(() => {
@@ -458,7 +459,7 @@ function ScheduleBody() {
     const m = Number(params.get('m'))
     return Number.isInteger(y) && y >= 2000 && y <= 2100 && Number.isInteger(m) && m >= 1 && m <= 12 ? { y, m } : { y: today.y, m: today.m }
   })
-  const [result, setResult] = useState<LoadResult | null>(null)
+  const [result, setResult] = useState<LoadResult | null>(fixedPage ? { state: 'ok', page: fixedPage } : null)
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null)
   const [view, setView] = useState<'list' | 'grid'>(readStoredView)
   const [labelId, setLabelId] = useState<string | null>(null)
@@ -471,7 +472,7 @@ function ScheduleBody() {
 
   // 일정 페이지를 읽는다. 일정 링크(?e=)로 들어왔으면 읽은 직후 그 달로 가서 상세 팝업을 연다.
   useEffect(() => {
-    if (!slug || !isValidSlug(slug)) return
+    if (fixedPage || !slug || !isValidSlug(slug)) return
     let alive = true
     loadSchedulePage(slug).then((r) => {
       if (!alive) return
@@ -490,7 +491,7 @@ function ScheduleBody() {
     return () => {
       alive = false
     }
-  }, [slug, attempt, params])
+  }, [slug, attempt, params, fixedPage])
 
   const retry = useCallback(() => {
     setResult(null)
@@ -769,10 +770,10 @@ function ScheduleBody() {
   )
 }
 
-export default function StarSchedule() {
+export default function StarSchedule({ fixedPage }: { fixedPage?: SchedulePage } = {}) {
   return (
     <BstageLocaleProvider>
-      <ScheduleBody />
+      <ScheduleBody fixedPage={fixedPage} />
     </BstageLocaleProvider>
   )
 }
