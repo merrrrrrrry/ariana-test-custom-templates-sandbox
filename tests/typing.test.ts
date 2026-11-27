@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   diffChars,
   isComplete,
+  isPlausibleCpm,
   keystrokeCount,
   parseBest,
   pickPhraseIndex,
@@ -50,6 +51,15 @@ assert.equal(parseBest('abc'), 0)
 assert.equal(parseBest('-3'), 0)
 assert.equal(parseBest('2.5'), 0)
 assert.equal(parseBest('99999999'), 0)
+
+// 사람이 낼 수 있는 속도: 상한 이하만 기록으로 인정한다
+assert.equal(isPlausibleCpm(300), true)
+assert.equal(isPlausibleCpm(1000), true)
+assert.equal(isPlausibleCpm(1001), false)
+assert.equal(isPlausibleCpm(4_200_000), false)
+assert.equal(isPlausibleCpm(0), false)
+assert.equal(isPlausibleCpm(Number.NaN), false)
+assert.equal(isPlausibleCpm(Number.POSITIVE_INFINITY), false)
 
 // 문장 목록: 비어 있지 않고, 서로 겹치지 않고, 앞뒤 공백이 없고, 한 판에 알맞은 길이
 assert.ok(PHRASES.length >= 2)

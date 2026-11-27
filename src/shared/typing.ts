@@ -14,6 +14,13 @@ export function strokesPerMinute(strokes: number, elapsedMs: number): number {
   return Math.round(strokes / (elapsedMs / 60000))
 }
 
+// 사람이 낼 수 있는 분당 타수의 상한(서버 src/typing.js의 MAX_CPM과 같은 값). 이보다 빠르면 기록으로 인정하지 않는다.
+export const MAX_PLAUSIBLE_CPM = 1000
+
+export function isPlausibleCpm(cpm: number): boolean {
+  return Number.isFinite(cpm) && cpm > 0 && cpm <= MAX_PLAUSIBLE_CPM
+}
+
 // 입력이 목표 문장과 정확히 같으면 끝. 조합 방식이 달라도 같은 글자면 같게 본다(NFC).
 export function isComplete(target: string, typed: string): boolean {
   return typed.normalize('NFC') === target.normalize('NFC')
