@@ -6,11 +6,13 @@ import {
   browserStorage,
   createViewersApi,
   getOrCreateGuestId,
+  isCrowdedEnough,
   nextDelay,
   normalizeServerUrl,
   resolveFetch,
   type ViewerStats,
 } from './viewersApi'
+import { loadViewersConfig } from './loadViewersConfig'
 
 // "지금 N명이 보는 중". 어느 페이지에든 <ViewersBadge page="/경로" />로 붙인다.
 // - 로그인 여부와 상관없이, 브라우저에 저장해 둔 임의의 방문자 id(guest-…)로 15초마다 하트비트(= 보는 사람으로 집계)하고 현재 수를 받는다.
@@ -80,6 +82,16 @@ export interface ViewersBadgeProps {
    */
   quiet?: boolean
   /**
+   * 지금 보는 사람이 이 수보다 적으면 배지를 아예 그리지 않는다(사람이 적어 썰렁해 보이는 걸 막으려고). 0이면 항상 보여 준다.
+   * 0보다 크게 두면 값을 아직 못 받았을 때도 그리지 않는다. 보는 사람에는 나 자신도 들어가므로 3이면 나 말고 2명 이상일 때 보인다.
+   */
+  minWatching?: number
+  /**
+   * true면 최소 인원을 어드민("실시간 뷰어 수" 설정)에서 운영자가 정한 값으로 쓴다. 어드민에 저장된 값이 없거나 읽기에 실패하면
+   * `minWatching` prop 값을 쓴다. 값을 읽는 동안은 아무것도 그리지 않는다. 설정은 페이지를 열 때 한 번 읽는다(저장 후 보통 1분 안에 반영).
+   */
+  adminMinWatching?: boolean
+  /**
    * 바깥 여백(카드 모양에만 적용). 래퍼 div에 padding을 주면 안 그려질 때도 자리를 차지하므로 본체의 margin으로 받는다.
    * 배너 모양은 플랫폼 화면 여백(모바일 16px, 넓은 화면 32px)을 스스로 따라가므로 이 값을 쓰지 않는다.
    */
@@ -121,9 +133,42 @@ const BANNER_CSS = `
 @media (prefers-reduced-motion: reduce) { .bmf-viewers-ring { animation: none; opacity: 0 } }
 `
 
-function ViewersBadgeInner({ page, variant = 'card', quiet = false, margin }: ViewersBadgeProps) {
+// 어드민에서 정한 최소 인원. enabled가 아니면 읽지 않는다. 읽는 동안(ready=false)은 아무것도 그리지 않아서,
+// 어드민에서 기준을 3으로 해 뒀는데 캡슐이 잠깐 보였다 사라지는 일이 없다. 값이 없거나 읽기에 실패하면 value=null.
+function useAdminMinWatching(enabled: boolean): { ready: boolean; value: number | null } {
+  const [state, setState] = useState<{ ready: boolean; value: number | null }>({ ready: !enabled, value: null })
+  useEffect(() => {
+    if (!enabled) return
+    let cancelled = false
+    void loadViewersConfig().then((config) => {
+      if (!cancelled) setState({ ready: true, value: config ? config.minWatching : null })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [enabled])
+  return state
+}
+
+function ViewersBadgeInner({
+  page,
+  variant = 'card',
+  quiet = false,
+  minWatching = 0,
+  adminMinWatching = false,
+  margin,
+}: ViewersBadgeProps) {
   const { stats, status } = useViewers(page)
   const largeScreen = useLargeScreen()
+  const admin = useAdminMinWatching(adminMinWatching)
+
+  // 어드민 설정을 쓰는 경우 값을 읽기 전에는 그리지 않는다.
+  if (!admin.ready) return null
+
+  // 썰렁한 곳(보는 사람이 최소 인원 미만)에서는 그리지 않는다. 숫자가 15초마다 바뀌므로 사람이 늘면 그때 나타난다.
+  // 최소 인원은 어드민에 저장된 값이 우선이고, 저장된 값이 없으면 minWatching prop(기본 0 = 항상 보임)을 쓴다.
+  const requiredWatching = admin.value ?? minWatching
+  if (requiredWatching > 0 && !(stats && isCrowdedEnough(stats.watching, requiredWatching))) return null
 
   if (quiet && !stats) return null
 
